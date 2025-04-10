@@ -412,8 +412,7 @@ def demo_lam(flametracking, lam, cfg):
         
         gr.HTML("""<div style="margin-top: -10px">
             <p style="margin: 4px 0; line-height: 1.2"><h4 style="color: black; margin: 2px 0">Notes1: Inputing front-face images or face orientation close to the driven signal gets better results.</h4></p>
-            <p style="margin: 4px 0; line-height: 1.2"><h4 style="color: black; margin: 2px 0">Notes2: Due to computational constraints with Hugging Face's ZeroGPU infrastructure, 3D avatar generation requires ~1 minute per instance.</h4></p>
-            <p style="margin: 4px 0; line-height: 1.2"><h4 style="color: black; margin: 2px 0">Notes3: Using LAM-20K model (lower quality than premium LAM-80K) to mitigate processing latency.</h4></p>
+            <p style="margin: 4px 0; line-height: 1.2"><h4 style="color: black; margin: 2px 0">Notes2: Using LAM-20K model (lower quality than premium LAM-80K) to mitigate processing latency.</h4></p>
         </div>""")
 
 
