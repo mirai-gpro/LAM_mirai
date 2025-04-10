@@ -21,5 +21,5 @@ license: Apache License 2.0
 ---
 #### Clone with HTTP
 ```bash
- git clone https://www.modelscope.cn/studios/Damo_XR_Lab/LAM_Large_Avatar_Model.git
+ git clone https://www.modelscope.cn/studios/Damo_XR_Lab/LAM.git
 ```
