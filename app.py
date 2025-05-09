@@ -102,9 +102,9 @@ def compile_module(subfolder, script):
 compile_module("external/landmark_detection/FaceBoxesV2/utils/", "make.sh")
 from flame_tracking_single_image import FlameTrackingSingleImage
 
-def upload2oss(filepath):
+def upload2oss(enable_oac_file, filepath):
 
-    if(os.path.exists(filepath)):
+    if(enable_oac_file):
 
         print("Uploading {} ... to {} ...".format(filepath,os.path.join('virutalbuy-public','share/aigc3d/LAM_Chatting_Avatar')))
         access_key_id = os.getenv('key_id')
@@ -123,7 +123,7 @@ def upload2oss(filepath):
         except oss2.exceptions as e:
             print("Upload failed:", str(e))
     else:
-        print("File {} is not exists!".format(filepath))
+        pass
 
 
 def launch_pretrained():
@@ -628,7 +628,7 @@ def demo_lam(flametracking, lam, cfg):
             outputs=[processed_image, output_video, output_zip_textbox, download_command],
         ).success(
             fn=upload2oss,
-            inputs=[output_zip_textbox]
+            inputs=[enable_oac_file,output_zip_textbox]
         )
 
         demo.queue()
