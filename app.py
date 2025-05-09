@@ -15,6 +15,10 @@
 import os
 
 os.system("rm -rf /data-nvme/zerogpu-offload/")
+print("Blender file exist {}".format(os.path.exists('./blender-4.0.2-linux-x64.tar.xz')))
+os.system('tar -xf ./blender-4.0.2-linux-x64.tar.xz')
+os.system('chmod +x ./blender-4.0.2-linux-x64/blender')
+os.system("pip install patool")
 os.system("pip uninstall -y xformers")
 os.system("pip install chumpy")
 # os.system("pip uninstall -y basicsr")
@@ -30,12 +34,22 @@ os.system("pip install iopath")
 os.system("pip install ./wheels/pytorch3d-0.7.8-cp310-cp310-linux_x86_64.whl --force-reinstall")
 # os.system("pip install -U xformers==0.0.26.post1 --index-url https://download.pytorch.org/whl/cu121")
 os.system("pip install numpy==1.23.0")
+os.system("pip install oss2")
 
+print("Run install FBX SDK ..............................3")
+os.system('pip install ./wheels/fbx-2020.3.4-cp310-cp310-manylinux1_x86_64.whl')
+
+print("Install FBX SDK Finished..............................3")
+
+# import sys
+# sys.path.insert(0, os.path.abspath('tools'))
+# sys.path.insert(0, os.path.abspath('./'))
+
+import oss2
 import cv2
-import sys
 import base64
 import subprocess
-
+from datetime import datetime
 import argparse
 from glob import glob
 import gradio as gr
@@ -50,6 +64,15 @@ from lam.utils.ffmpeg_utils import images_to_video
 
 # import spaces
 
+
+# def conver_oac_file():
+#     print("Conver oac file ......")
+#     from fbx_tools.generateARKITGLBWithBlender import convert_ascii_to_binary
+#     from pathlib import Path
+#     temp_files = {"ascii":Path('./assets/sampe_oac/template_file.fbx'),
+#                   "binary":Path('./assets/sampe_oac/template_file_binary.fbx')}
+#     convert_ascii_to_binary(temp_files["ascii"], temp_files["binary"])
+#     return temp_files["binary"]
 
 def compile_module(subfolder, script):
     try:
@@ -80,6 +103,23 @@ def compile_module(subfolder, script):
 compile_module("external/landmark_detection/FaceBoxesV2/utils/", "make.sh")
 from flame_tracking_single_image import FlameTrackingSingleImage
 
+def upload2oss(filepath):
+    print("Uploading {} ... to {} ...".format(filepath,os.path.join('virutalbuy-public','share/aigc3d/LAM_Chatting_Avatar')))
+    access_key_id = os.getenv('key_id')
+    access_key_secret = os.getenv('key_secret')
+
+    endpoint = 'http://oss-cn-hangzhou.aliyuncs.com'
+    bucket_name = 'virutalbuy-public'
+
+    object_name = os.path.join('share/aigc3d/LAM_Chatting_Avatar',filepath.split('/')[-1])
+    auth = oss2.Auth(access_key_id, access_key_secret)
+    bucket = oss2.Bucket(auth, endpoint, bucket_name)
+
+    try:
+        result = bucket.put_object_from_file(object_name, filepath)
+        print("Upload Successful. HTTP Status Code:", result.status)
+    except oss2.exceptions as e:
+        print("Upload failed:", str(e))
 
 def launch_pretrained():
     from huggingface_hub import snapshot_download, hf_hub_download
@@ -204,11 +244,15 @@ def parse_configs():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str)
     parser.add_argument("--infer", type=str)
+    parser.add_argument("--blender_path", type=str,
+                        default='./blender-4.0.2-linux-x64/blender' ,
+                        help="Path to Blender executable")
+
     args, unknown = parser.parse_known_args()
 
     cfg = OmegaConf.create()
     cli_cfg = OmegaConf.from_cli(unknown)
-
+    cfg.blender_path = args.blender_path
     # parse from ENV
     if os.environ.get("APP_INFER") is not None:
         args.infer = os.environ.get("APP_INFER")
@@ -259,14 +303,14 @@ def parse_configs():
 
 def demo_lam(flametracking, lam, cfg):
     # @spaces.GPU(duration=80)
-    def core_fn(image_path: str, video_params, working_dir):
+    def core_fn(image_path: str, video_params, working_dir, enable_oac_file):
         image_raw = os.path.join(working_dir.name, "raw.png")
         with Image.open(image_path).convert('RGB') as img:
             img.save(image_raw)
 
         base_vid = os.path.basename(video_params).split(".")[0]
         flame_params_dir = os.path.join("./assets/sample_motion/export", base_vid, "flame_param")
-        base_iid = os.path.basename(image_path).split('.')[0]
+        base_iid = os.path.basename(image_path).split('.')[0]+'_'+datetime.now().strftime("%Y%m%d%H%M%S")
         image_path = os.path.join("./assets/sample_input", base_iid, "images/00000_00.png")
 
         dump_video_path = os.path.join(working_dir.name, "output.mp4")
@@ -306,10 +350,8 @@ def demo_lam(flametracking, lam, cfg):
         return_code, output_dir = flametracking.export()
         assert (return_code == 0), "flametracking export failed!"
         image_path = os.path.join(output_dir, "images/00000_00.png")
-        # """
-
-        mask_path = image_path.replace("/images/", "/fg_masks/").replace(".jpg", ".png")
-        print(image_path, mask_path)
+        mask_path = os.path.join(output_dir, "fg_masks/00000_00.png")
+        print("image_path:", image_path, "\n" + "mask_path:", mask_path)
 
         aspect_standard = 1.0 / 1.0
         source_size = cfg.source_size
@@ -351,6 +393,50 @@ def demo_lam(flametracking, lam, cfg):
                                         render_bg_colors=motion_seq["render_bg_colors"].to(device),
                                         flame_params={k: v.to(device) for k, v in motion_seq["flame_params"].items()})
 
+        # save h5 rendering info
+        if enable_oac_file:
+            # try:
+            from generateARKITGLBWithBlender import generate_glb
+            from pathlib import Path
+            import shutil
+            import patoolib
+
+            oac_dir = os.path.join('./', base_iid)
+            saved_head_path = lam.renderer.flame_model.save_shaped_mesh(shape_param.unsqueeze(0).cuda(), fd=oac_dir)
+            res['cano_gs_lst'][0].save_ply(os.path.join(oac_dir, "offset.ply"), rgb2sh=False, offset2xyz=True)
+            generate_glb(
+                input_mesh=Path(saved_head_path),
+                template_fbx=Path("./assets/sample_oac/template_file.fbx"),
+                output_glb=Path(os.path.join(oac_dir, "skin.glb")),
+                blender_exec=Path(cfg.blender_path)
+            )
+            shutil.copy(
+                src='./assets/sample_oac/animation.glb',
+                dst=os.path.join(oac_dir, 'animation.glb')
+            )
+            os.remove(saved_head_path)
+
+            output_zip_path = os.path.join('./', base_iid + '.zip')
+            if os.path.exists(output_zip_path):
+                os.remove(output_zip_path)
+            os.system('zip -r {} {}'.format(output_zip_path,oac_dir))
+            # original_cwd = os.getcwd()
+            # oac_parent_dir = os.path.dirname(oac_dir)
+            # base_iid_dir = os.path.basename(oac_dir)
+            # os.chdir(oac_parent_dir)
+            # try:
+            #     patoolib.create_archive(
+            #         archive=os.path.abspath(output_zip_path),
+            #         filenames=[base_iid_dir],
+            #         verbosity=-1,
+            #         program='zip'
+            #     )
+            # finally:
+            #     os.chdir(original_cwd)
+            shutil.rmtree(oac_dir)
+            # except Exception as e:
+            #     output_zip_path = f"Archive creation failed: {str(e)}"
+
         rgb = res["comp_rgb"].detach().cpu().numpy()  # [Nv, H, W, 3], 0-1
         mask = res["comp_mask"].detach().cpu().numpy()  # [Nv, H, W, 3], 0-1
         mask[mask < 0.5] = 0.0
@@ -373,7 +459,9 @@ def demo_lam(flametracking, lam, cfg):
         dump_video_path_wa = dump_video_path.replace(".mp4", "_audio.mp4")
         add_audio_to_video(dump_video_path, dump_video_path_wa, audio_path)
 
-        return dump_image_path, dump_video_path_wa
+        download_command = 'wget https://virutalbuy-public.oss-cn-hangzhou.aliyuncs.com/share/aigc3d/LAM_Chatting_Avatar/'+output_zip_path.split('/')[-1]
+
+        return dump_image_path, dump_video_path_wa, output_zip_path if enable_oac_file else '', download_command
 
     def core_fn_space(image_path: str, video_params, working_dir):
         return core_fn(image_path, video_params, working_dir)
@@ -429,7 +517,7 @@ def demo_lam(flametracking, lam, cfg):
                                                    height=480,
                                                    width=270,
                                                    sources='upload',
-                                                   type='filepath',
+                                                   type='filepath',  # 'numpy',
                                                    elem_id='content_image')
                 # EXAMPLES
                 with gr.Row():
@@ -461,8 +549,7 @@ def demo_lam(flametracking, lam, cfg):
                                                    height=480,
                                                    width=270,
                                                    interactive=False)
-#                            './assets/sample_motion/export/Joe_Biden/Joe_Biden.mp4',
-#                            './assets/sample_motion/export/Donald_Trump/Donald_Trump.mp4', 
+
                 examples = ['./assets/sample_motion/export/Speeding_Scandal/Speeding_Scandal.mp4', 
                             './assets/sample_motion/export/Look_In_My_Eyes/Look_In_My_Eyes.mp4', 
                             './assets/sample_motion/export/D_ANgelo_Dinero/D_ANgelo_Dinero.mp4', 
@@ -507,12 +594,20 @@ def demo_lam(flametracking, lam, cfg):
         # SETTING
         with gr.Row():
             with gr.Column(variant='panel', scale=1):
+                enable_oac_file = gr.Checkbox(label="Export ZIP file for Chatting Avatar",
+                                              value=False,
+                                              visible=os.path.exists(cfg.blender_path))
                 submit = gr.Button('Generate',
                                    elem_id='lam_generate',
                                    variant='primary')
+                download_command = gr.Textbox(
+                    label="Download ZIP file for Chatting Avatar",
+                    interactive=False,
+                    placeholder="Download ZIP file for Chatting Avatar ...",
+                    visible=os.path.exists(cfg.blender_path)
+                )
 
-        main_fn = core_fn
-
+        output_zip_textbox = gr.Textbox(visible=False)
         working_dir = gr.State()
         submit.click(
             fn=assert_input_image,
@@ -523,10 +618,13 @@ def demo_lam(flametracking, lam, cfg):
             outputs=[working_dir],
             queue=False,
         ).success(
-            fn=main_fn,
+            fn=core_fn,
             inputs=[input_image, video_input,
-                    working_dir],  # video_params refer to smpl dir
-            outputs=[processed_image, output_video],
+                    working_dir, enable_oac_file],  # video_params refer to smpl dir
+            outputs=[processed_image, output_video, output_zip_textbox, download_command],
+        ).success(
+            fn=upload2oss,
+            inputs=[output_zip_textbox]
         )
 
         demo.queue()
