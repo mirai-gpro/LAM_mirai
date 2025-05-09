@@ -465,7 +465,7 @@ def demo_lam(flametracking, lam, cfg):
 
         download_command = 'wget https://virutalbuy-public.oss-cn-hangzhou.aliyuncs.com/share/aigc3d/LAM_Chatting_Avatar/'+output_zip_path.split('/')[-1]
 
-        return dump_image_path, dump_video_path_wa, output_zip_path if enable_oac_file else '', output_zip_path if download_command else ''
+        return dump_image_path, dump_video_path_wa, output_zip_path if enable_oac_file else '', download_command if enable_oac_file else ''
 
     def core_fn_space(image_path: str, video_params, working_dir):
         return core_fn(image_path, video_params, working_dir)
