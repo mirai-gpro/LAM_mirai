@@ -103,22 +103,28 @@ compile_module("external/landmark_detection/FaceBoxesV2/utils/", "make.sh")
 from flame_tracking_single_image import FlameTrackingSingleImage
 
 def upload2oss(filepath):
-    print("Uploading {} ... to {} ...".format(filepath,os.path.join('virutalbuy-public','share/aigc3d/LAM_Chatting_Avatar')))
-    access_key_id = os.getenv('key_id')
-    access_key_secret = os.getenv('key_secret')
 
-    endpoint = 'http://oss-cn-hangzhou.aliyuncs.com'
-    bucket_name = 'virutalbuy-public'
+    if(os.path.exists(filepath)):
 
-    object_name = os.path.join('share/aigc3d/LAM_Chatting_Avatar',filepath.split('/')[-1])
-    auth = oss2.Auth(access_key_id, access_key_secret)
-    bucket = oss2.Bucket(auth, endpoint, bucket_name)
+        print("Uploading {} ... to {} ...".format(filepath,os.path.join('virutalbuy-public','share/aigc3d/LAM_Chatting_Avatar')))
+        access_key_id = os.getenv('key_id')
+        access_key_secret = os.getenv('key_secret')
 
-    try:
-        result = bucket.put_object_from_file(object_name, filepath)
-        print("Upload Successful. HTTP Status Code:", result.status)
-    except oss2.exceptions as e:
-        print("Upload failed:", str(e))
+        endpoint = 'http://oss-cn-hangzhou.aliyuncs.com'
+        bucket_name = 'virutalbuy-public'
+
+        object_name = os.path.join('share/aigc3d/LAM_Chatting_Avatar',filepath.split('/')[-1])
+        auth = oss2.Auth(access_key_id, access_key_secret)
+        bucket = oss2.Bucket(auth, endpoint, bucket_name)
+
+        try:
+            result = bucket.put_object_from_file(object_name, filepath)
+            print("Upload Successful. HTTP Status Code:", result.status)
+        except oss2.exceptions as e:
+            print("Upload failed:", str(e))
+    else:
+        print("File {} is not exists!".format(filepath))
+
 
 def launch_pretrained():
     from huggingface_hub import snapshot_download, hf_hub_download
@@ -309,8 +315,7 @@ def demo_lam(flametracking, lam, cfg):
 
         base_vid = os.path.basename(video_params).split(".")[0]
         flame_params_dir = os.path.join("./assets/sample_motion/export", base_vid, "flame_param")
-        base_iid = os.path.basename(image_path).split('.')[0]+'_'+datetime.now().strftime("%Y%m%d%H%M%S")
-        image_path = os.path.join("./assets/sample_input", base_iid, "images/00000_00.png")
+        base_iid = 'chatting_avatar_'+datetime.now().strftime("%Y%m%d%H%M%S")
 
         dump_video_path = os.path.join(working_dir.name, "output.mp4")
         dump_image_path = os.path.join(working_dir.name, "output.png")
@@ -394,47 +399,47 @@ def demo_lam(flametracking, lam, cfg):
 
         # save h5 rendering info
         if enable_oac_file:
-            # try:
-            from generateARKITGLBWithBlender import generate_glb
-            from pathlib import Path
-            import shutil
-            import patoolib
+            try:
+                from generateARKITGLBWithBlender import generate_glb
+                from pathlib import Path
+                import shutil
+                import patoolib
 
-            oac_dir = os.path.join('./', base_iid)
-            saved_head_path = lam.renderer.flame_model.save_shaped_mesh(shape_param.unsqueeze(0).cuda(), fd=oac_dir)
-            res['cano_gs_lst'][0].save_ply(os.path.join(oac_dir, "offset.ply"), rgb2sh=False, offset2xyz=True)
-            generate_glb(
-                input_mesh=Path(saved_head_path),
-                template_fbx=Path("./assets/sample_oac/template_file.fbx"),
-                output_glb=Path(os.path.join(oac_dir, "skin.glb")),
-                blender_exec=Path(cfg.blender_path)
-            )
-            shutil.copy(
-                src='./assets/sample_oac/animation.glb',
-                dst=os.path.join(oac_dir, 'animation.glb')
-            )
-            os.remove(saved_head_path)
+                oac_dir = os.path.join('./', base_iid)
+                saved_head_path = lam.renderer.flame_model.save_shaped_mesh(shape_param.unsqueeze(0).cuda(), fd=oac_dir)
+                res['cano_gs_lst'][0].save_ply(os.path.join(oac_dir, "offset.ply"), rgb2sh=False, offset2xyz=True)
+                generate_glb(
+                    input_mesh=Path(saved_head_path),
+                    template_fbx=Path("./assets/sample_oac/template_file.fbx"),
+                    output_glb=Path(os.path.join(oac_dir, "skin.glb")),
+                    blender_exec=Path(cfg.blender_path)
+                )
+                shutil.copy(
+                    src='./assets/sample_oac/animation.glb',
+                    dst=os.path.join(oac_dir, 'animation.glb')
+                )
+                os.remove(saved_head_path)
 
-            output_zip_path = os.path.join('./', base_iid + '.zip')
-            if os.path.exists(output_zip_path):
-                os.remove(output_zip_path)
-            os.system('zip -r {} {}'.format(output_zip_path,oac_dir))
-            # original_cwd = os.getcwd()
-            # oac_parent_dir = os.path.dirname(oac_dir)
-            # base_iid_dir = os.path.basename(oac_dir)
-            # os.chdir(oac_parent_dir)
-            # try:
-            #     patoolib.create_archive(
-            #         archive=os.path.abspath(output_zip_path),
-            #         filenames=[base_iid_dir],
-            #         verbosity=-1,
-            #         program='zip'
-            #     )
-            # finally:
-            #     os.chdir(original_cwd)
-            shutil.rmtree(oac_dir)
-            # except Exception as e:
-            #     output_zip_path = f"Archive creation failed: {str(e)}"
+                output_zip_path = os.path.join('./', base_iid + '.zip')
+                if os.path.exists(output_zip_path):
+                    os.remove(output_zip_path)
+                os.system('zip -r {} {}'.format(output_zip_path,oac_dir))
+                # original_cwd = os.getcwd()
+                # oac_parent_dir = os.path.dirname(oac_dir)
+                # base_iid_dir = os.path.basename(oac_dir)
+                # os.chdir(oac_parent_dir)
+                # try:
+                #     patoolib.create_archive(
+                #         archive=os.path.abspath(output_zip_path),
+                #         filenames=[base_iid_dir],
+                #         verbosity=-1,
+                #         program='zip'
+                #     )
+                # finally:
+                #     os.chdir(original_cwd)
+                shutil.rmtree(oac_dir)
+            except Exception as e:
+                output_zip_path = f"Archive creation failed: {str(e)}"
 
         rgb = res["comp_rgb"].detach().cpu().numpy()  # [Nv, H, W, 3], 0-1
         mask = res["comp_mask"].detach().cpu().numpy()  # [Nv, H, W, 3], 0-1
@@ -460,7 +465,7 @@ def demo_lam(flametracking, lam, cfg):
 
         download_command = 'wget https://virutalbuy-public.oss-cn-hangzhou.aliyuncs.com/share/aigc3d/LAM_Chatting_Avatar/'+output_zip_path.split('/')[-1]
 
-        return dump_image_path, dump_video_path_wa, output_zip_path if enable_oac_file else '', download_command
+        return dump_image_path, dump_video_path_wa, output_zip_path if enable_oac_file else '', output_zip_path if download_command else ''
 
     def core_fn_space(image_path: str, video_params, working_dir):
         return core_fn(image_path, video_params, working_dir)
