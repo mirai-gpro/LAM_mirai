@@ -396,7 +396,8 @@ def demo_lam(flametracking, lam, cfg):
                                         render_intrs=motion_seq["render_intrs"].to(device),
                                         render_bg_colors=motion_seq["render_bg_colors"].to(device),
                                         flame_params={k: v.to(device) for k, v in motion_seq["flame_params"].items()})
-
+        output_zip_path = ''
+        download_command = ''
         # save h5 rendering info
         if enable_oac_file:
             try:
@@ -438,6 +439,9 @@ def demo_lam(flametracking, lam, cfg):
                 # finally:
                 #     os.chdir(original_cwd)
                 shutil.rmtree(oac_dir)
+                download_command = 'wget https://virutalbuy-public.oss-cn-hangzhou.aliyuncs.com/share/aigc3d/LAM_Chatting_Avatar/' + \
+                                   output_zip_path.split('/')[-1]
+
             except Exception as e:
                 output_zip_path = f"Archive creation failed: {str(e)}"
 
@@ -463,9 +467,8 @@ def demo_lam(flametracking, lam, cfg):
         dump_video_path_wa = dump_video_path.replace(".mp4", "_audio.mp4")
         add_audio_to_video(dump_video_path, dump_video_path_wa, audio_path)
 
-        download_command = 'wget https://virutalbuy-public.oss-cn-hangzhou.aliyuncs.com/share/aigc3d/LAM_Chatting_Avatar/'+output_zip_path.split('/')[-1]
 
-        return dump_image_path, dump_video_path_wa, output_zip_path if enable_oac_file else '', download_command if enable_oac_file else ''
+        return dump_image_path, dump_video_path_wa, output_zip_path, download_command
 
     def core_fn_space(image_path: str, video_params, working_dir):
         return core_fn(image_path, video_params, working_dir)
