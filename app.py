@@ -15,9 +15,12 @@
 import os
 
 os.system("rm -rf /data-nvme/zerogpu-offload/")
+
 print("Blender file exist {}".format(os.path.exists('./blender-4.0.2-linux-x64.tar.xz')))
+
 os.system('tar -xf ./blender-4.0.2-linux-x64.tar.xz')
 os.system('chmod +x ./blender-4.0.2-linux-x64/blender')
+
 os.system("pip install patool")
 os.system("pip uninstall -y xformers")
 os.system("pip install chumpy")
@@ -29,16 +32,15 @@ os.system("pip install ./wheels/simple_knn-0.0.0-cp310-cp310-linux_x86_64.whl --
 # os.system("pip install nvdiffrast@git+https://github.com/ShenhanQian/nvdiffrast@backface-culling --force-reinstall")
 os.system("pip install ./external/nvdiffrast/")
 os.system("pip install iopath")
-os.system("pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt240/download.html --force-reinstall")
-# os.system("pip install ./wheels/pytorch3d-0.7.8-cp310-cp310-linux_x86_64.whl --force-reinstall")
+# os.system("pip install --no-index --no-cache-dir pytorch3d -f https://dl.fbaipublicfiles.com/pytorch3d/packaging/wheels/py310_cu121_pyt240/download.html --force-reinstall")
+os.system("pip install ./wheels/pytorch3d-0.7.8-cp310-cp310-linux_x86_64.whl --force-reinstall")
 # os.system("pip install -U xformers==0.0.26.post1 --index-url https://download.pytorch.org/whl/cu121")
 os.system("pip install numpy==1.23.0")
 os.system("pip install oss2")
 
-print("Run install FBX SDK ..............................3")
+print("Run install FBX SDK ..............................")
 os.system('pip install ./wheels/fbx-2020.3.4-cp310-cp310-manylinux1_x86_64.whl')
-
-print("Install FBX SDK Finished..............................3")
+print("Install FBX SDK Finished..............................")
 
 # import sys
 # sys.path.insert(0, os.path.abspath('tools'))
