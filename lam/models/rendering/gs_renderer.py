@@ -531,13 +531,13 @@ class GS3DRenderer(nn.Module):
         # torch.cuda.synchronize()
         # with boxx.timeit():
         print("=== raster debug ===")
-        print("image_height, image_width:", image_height, image_width)
+        print("image_height, image_width:", int(viewpoint_camera.height), int(viewpoint_camera.width))
         for name, t in [
-            ("xyz", xyz),
+            ("xyz", means3D),
             ("opacity", opacity),
             ("scales", scales),
             ("rotations", rotations),
-            ("features", shs if 'shs' in locals() else None),
+            ("features", shs if "shs" in locals() else None),
         ]:
             if t is None:
                 print(name, "None")
