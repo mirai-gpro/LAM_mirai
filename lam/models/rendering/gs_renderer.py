@@ -527,9 +527,29 @@ class GS3DRenderer(nn.Module):
             colors_precomp = gs.shs.squeeze(1)
         else:
             shs = gs.shs
-        # Rasterize visible Gaussians to image, obtain their radii (on screen). 
+        # Rasterize visible Gaussians to image, obtain their radii (on screen).
         # torch.cuda.synchronize()
         # with boxx.timeit():
+        print("=== raster debug ===")
+        print("image_height, image_width:", int(viewpoint_camera.height), int(viewpoint_camera.width))
+        for name, t in [
+            ("xyz", means3D),
+            ("opacity", opacity),
+            ("scales", scales),
+            ("rotations", rotations),
+            ("features", shs if "shs" in locals() else None),
+        ]:
+            if t is None:
+                print(name, "None")
+                continue
+            print(
+                name,
+                "shape=", tuple(t.shape),
+                "dtype=", t.dtype,
+                "finite=", torch.isfinite(t).all().item(),
+                "min=", float(torch.nan_to_num(t).min()),
+                "max=", float(torch.nan_to_num(t).max()),
+            )
         with torch.autocast(device_type=self.device.type, dtype=torch.float32):
             raster_ret = rasterizer(
                 means3D = means3D.float(),
