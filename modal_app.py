@@ -120,7 +120,7 @@ image = (
         "PyYAML==6.0.1",
         "rembg==2.0.63",
         "Requests==2.32.3",
-        "scipy",
+        "scipy<1.12",  # simps removed in 1.12; needed by external/landmark_detection
         "setuptools==74.0.0",
         "taming-transformers-rom1504==0.0.6",
         "timm==1.0.15",
