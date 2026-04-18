@@ -93,7 +93,8 @@ image = (
     # Base requirements - EXACT versions from ModelScope requirements.txt
     .pip_install(
         "einops", "roma", "accelerate", "smplx", "iopath", "wheel",
-        "face-detection-tflite==0.6.0",
+        # face-detection-tflite removed: pulls tensorflow 1.2GB+, only
+        # used for iris detection (detect_iris_landmarks=False in our config)
         "moviepy==1.0.3",
         "decord==0.6.0",
         "diffusers",
@@ -168,7 +169,13 @@ image = (
         "print('[DINOv2] cached OK')\"",
     )
     # Final numpy re-pin in case any pip install bumped it
-    .run_commands("pip install 'numpy==1.23.0' --force-reinstall")
+    .run_commands(
+        # Uninstall tensorflow (pulled by gfpgan→basicsr→tb-nightly chain).
+        # tensorflow 2.21 requires numpy>=1.26 but we pin 1.23.
+        # NOT needed for inference; torch.utils.tensorboard works without it.
+        "pip uninstall -y tensorflow tensorflow-io-gcs-filesystem tb-nightly 2>/dev/null; true",
+        "pip install 'numpy==1.23.0' --force-reinstall",
+    )
 )
 
 
