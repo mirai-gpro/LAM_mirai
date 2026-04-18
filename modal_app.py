@@ -793,30 +793,50 @@ def web():
 # ==================== CLI Test (bypass UI, test Generator directly) ====================
 
 @app.local_entrypoint()
-def test():
+def test(image: str = "messi"):
     """Test the Generator pipeline without UI. Logs appear in terminal.
 
-    Usage: modal run modal_app.py
+    Usage:
+        modal run modal_app.py                    # uses messi.png
+        modal run modal_app.py --image status     # uses status.png
+        modal run modal_app.py --image C:\\path\\to\\local.jpg  # local file
+
+    Available samples (from assets/sample_input/ in repo):
+        messi, status, james, cluo, dufu, libai, barbara, pop, musk, speed, zhouxingchi
     """
+    import os
+
     print("=== Testing Generator pipeline (no UI) ===")
-    print("This calls Generator().generate.remote() directly.")
-    print("Generator container logs will appear here.")
 
-    # Use a tiny test image (1x1 white pixel PNG)
-    import struct, zlib
-    def make_png():
-        raw = b"\x00\xff\xff\xff"
-        compressed = zlib.compress(raw)
-        ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
-        def chunk(ctype, data):
-            c = ctype + data
-            return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xffffffff)
-        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
+    # Resolve image: local file path, or sample name
+    if os.path.isfile(image):
+        local_path = image
+    else:
+        # Map short name to sample file (repo path)
+        samples_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "assets", "sample_input"
+        )
+        # Try common extensions
+        found = None
+        for ext in [".png", ".jpg", ".jpeg"]:
+            candidate = os.path.join(samples_dir, image + ext)
+            if os.path.isfile(candidate):
+                found = candidate
+                break
+        if not found:
+            # Try reading from repo-local assets (if running outside the repo)
+            print(f"ERROR: '{image}' not found as local file or sample name.")
+            print(f"Looked in: {samples_dir}")
+            print("Available: messi, status, james, cluo, dufu, libai, barbara, pop, musk, speed, zhouxingchi")
+            return
+        local_path = found
 
-    img_bytes = make_png()
-    print(f"Test image: {len(img_bytes)} bytes (1x1 white PNG)")
-    print("Calling Generator().generate.remote()...")
-    print("(Generator cold start: ~30-60s for model loading)")
+    with open(local_path, "rb") as f:
+        img_bytes = f.read()
+
+    print(f"Input image: {local_path} ({len(img_bytes):,} bytes)")
+    print("Calling Generator().generate.remote() with motion='GEM'...")
+    print("(First call: Generator cold start ~30-60s + tracking ~30s + inference ~30s)")
     print()
 
     try:
@@ -826,6 +846,9 @@ def test():
         print(f"\n=== SUCCESS ===")
         print(f"Video: {video_name}")
         print(f"ZIP: {zip_name}")
+        print()
+        print("Download the result with:")
+        print(f"  modal volume get lam-output {video_name} ./output/")
     except Exception as e:
         print(f"\n=== FAILED ===")
         print(f"Error: {e}")
