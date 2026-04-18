@@ -138,6 +138,7 @@ image = (
         "Cython",
         "patool",
         "safetensors",
+        "tensorboard",
         # Gradio + compat pins (starlette<0.41 keeps old TemplateResponse API
         # that gradio 4.44 depends on; 0.41+ breaks it)
         "gradio==4.44.1", "gradio-client==1.3.0",
@@ -172,8 +173,11 @@ image = (
     .run_commands(
         # Uninstall tensorflow (pulled by gfpgan→basicsr→tb-nightly chain).
         # tensorflow 2.21 requires numpy>=1.26 but we pin 1.23.
-        # NOT needed for inference; torch.utils.tensorboard works without it.
+        # Keep tensorboard (torch.utils.tensorboard needs it) but remove tb-nightly
+        # (which tries to load tensorflow).
         "pip uninstall -y tensorflow tensorflow-io-gcs-filesystem tb-nightly 2>/dev/null; true",
+        # Install plain tensorboard (works without tensorflow)
+        "pip install 'tensorboard<2.16'",
         "pip install 'numpy==1.23.0' --force-reinstall",
     )
 )
