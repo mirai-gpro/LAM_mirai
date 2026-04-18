@@ -138,11 +138,13 @@ image = (
         "patool",
         "safetensors",
         # Gradio
-        "gradio==4.44.0", "gradio-client==1.3.0", "fastapi",
+        "gradio==4.44.1", "gradio-client==1.3.0", "fastapi", "jinja2<3.1.6",
     )
     # Clone LAM_mirai source code from GitHub
+    # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
+    # would 404; the real file comes from the Volume via symlink anyway)
     .run_commands(
-        f"git clone -b {GITHUB_BRANCH} --depth 1 {GITHUB_REPO} /app",
+        f"GIT_LFS_SKIP_SMUDGE=1 git clone -b {GITHUB_BRANCH} --depth 1 {GITHUB_REPO} /app",
     )
     # Disable @torch.compile decorators (sed on cloned repo)
     .run_commands(
@@ -401,7 +403,7 @@ def _add_audio_to_video(video_path, out_path, audio_path, fps=30):
     image=image,
     volumes={"/vol": volume, "/vol_out": output_vol},
     timeout=900,
-    container_idle_timeout=600,
+    scaledown_window=600,
     enable_memory_snapshot=False,
 )
 class Generator:
@@ -629,7 +631,7 @@ class Generator:
     image=image,
     volumes={"/vol_out": output_vol},
     timeout=3600,
-    container_idle_timeout=600,
+    scaledown_window=600,
 )
 @modal.concurrent(max_inputs=10)
 @modal.asgi_app()
