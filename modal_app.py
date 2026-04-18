@@ -113,7 +113,7 @@ image = (
         "open3d==0.19.0",
         "opencv-python",
         "opencv-python-headless",
-        "Pillow==11.1.0",
+        "Pillow>=10.0.0,<11.0",
         "plyfile",
         "pygltflib==1.16.2",
         "pyrender==0.1.45",
