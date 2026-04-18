@@ -138,6 +138,7 @@ image = (
         "Cython",
         "patool",
         "safetensors",
+        "tensorboard",
         # Gradio + compat pins (starlette<0.41 keeps old TemplateResponse API
         # that gradio 4.44 depends on; 0.41+ breaks it)
         "gradio==4.44.1", "gradio-client==1.3.0",
