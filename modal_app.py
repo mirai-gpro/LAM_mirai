@@ -676,6 +676,10 @@ with gr.Blocks(title="LAM on Modal (ModelScope reproduction)") as demo:
             out_zip = gr.File(label="Output ZIP")
     btn.click(predict, inputs=[input_img, motion_choice, enable_oac], outputs=[out_video, out_zip])
 
+# Set attributes normally set by demo.launch() (bypassed by uvicorn direct)
+demo.max_file_size = None
+demo.queue()
+
 # Run uvicorn directly with gradio's ASGI app (bypass demo.launch localhost check)
 import uvicorn
 uvicorn.run(gr.routes.App.create_app(demo), host="0.0.0.0", port=7860)
