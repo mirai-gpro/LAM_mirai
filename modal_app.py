@@ -137,8 +137,10 @@ image = (
         "Cython",
         "patool",
         "safetensors",
-        # Gradio
-        "gradio==4.44.1", "gradio-client==1.3.0", "fastapi",
+        # Gradio + compat pins (starlette<0.41 keeps old TemplateResponse API
+        # that gradio 4.44 depends on; 0.41+ breaks it)
+        "gradio==4.44.1", "gradio-client==1.3.0",
+        "fastapi==0.115.6", "starlette==0.40.0",
     )
     # Clone LAM_mirai source code from GitHub
     # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
@@ -167,19 +169,6 @@ image = (
     )
     # Final numpy re-pin in case any pip install bumped it
     .run_commands("pip install 'numpy==1.23.0' --force-reinstall")
-    # Patch jinja2 LRUCache.get: catch TypeError for unhashable dict keys
-    # (starlette passes dict globals to jinja2 template cache → TypeError)
-    .run_commands(
-        "python3 -c \""
-        "import jinja2.utils, inspect; "
-        "src = inspect.getfile(jinja2.utils); "
-        "code = open(src).read(); "
-        "code = code.replace("
-        "'except KeyError:', "
-        "'except (KeyError, TypeError):'); "
-        "open(src, 'w').write(code); "
-        "print('[PATCH] jinja2 LRUCache: TypeError now caught in get()')\"",
-    )
 )
 
 
