@@ -172,6 +172,89 @@ image = (
 )
 
 
+# ==================== Build-time: bake wheels + external into image ====================
+# Uses Image.run_function with volumes= to access the pre-uploaded Volume during build.
+# This moves slow/hanging work (nvdiffrast CUDA compile, NMS Cython build) from
+# per-container cold start into image build (cached across all containers).
+
+def _bake_wheels_and_external():
+    """Install wheels + build NMS + install nvdiffrast (source) during image build."""
+    import subprocess
+    import shutil
+    import os
+
+    # Copy external/ from Volume into image permanent location
+    if os.path.exists("/opt/lam_external"):
+        shutil.rmtree("/opt/lam_external")
+    shutil.copytree("/vol/external", "/opt/lam_external")
+    print("[BUILD] copied external -> /opt/lam_external")
+
+    # Install wheels (same order as ModelScope app.py)
+    wheels_in_order = [
+        "diff_gaussian_rasterization-0.0.0-cp310-cp310-linux_x86_64.whl",
+        "simple_knn-0.0.0-cp310-cp310-linux_x86_64.whl",
+    ]
+    for whl in wheels_in_order:
+        path = f"/vol/wheels/{whl}"
+        subprocess.run(
+            ["pip", "install", "--force-reinstall", "--no-deps", path], check=True
+        )
+        print(f"[BUILD][WHEEL] {whl}")
+
+    # nvdiffrast from SOURCE (matches ModelScope app.py: pip install ./external/nvdiffrast/)
+    subprocess.run(
+        ["pip", "install", "/opt/lam_external/nvdiffrast/"], check=True
+    )
+    print("[BUILD][NVDIFFRAST] installed from source")
+
+    for whl in [
+        "pytorch3d-0.7.8-cp310-cp310-linux_x86_64.whl",
+        "fbx-2020.3.4-cp310-cp310-manylinux1_x86_64.whl",
+    ]:
+        path = f"/vol/wheels/{whl}"
+        subprocess.run(
+            ["pip", "install", "--force-reinstall", path], check=True
+        )
+        print(f"[BUILD][WHEEL] {whl}")
+
+    # Uninstall xformers (ModelScope app.py does this)
+    subprocess.run(["pip", "uninstall", "-y", "xformers"], check=False)
+    # Re-pin numpy (wheels bumped it)
+    subprocess.run(["pip", "install", "numpy==1.23.0"], check=True)
+
+    # Build NMS Cython extension now (needs external/ available)
+    nms_dir = "/opt/lam_external/landmark_detection/FaceBoxesV2/utils/nms"
+    subprocess.run(
+        ["sed", "-i", "s/dtype=np\\.int)/dtype=np.intp)/", f"{nms_dir}/cpu_nms.pyx"],
+        check=False,
+    )
+    subprocess.run(
+        [
+            "python", "-c",
+            "from setuptools import setup, Extension; "
+            "from Cython.Build import cythonize; import numpy; "
+            "setup(ext_modules=cythonize([Extension('cpu_nms', ['cpu_nms.pyx'])]), "
+            "include_dirs=[numpy.get_include()])",
+            "build_ext", "--inplace",
+        ],
+        cwd=nms_dir, check=True,
+    )
+    print("[BUILD][NMS] Cython extension built")
+
+    # Copy built external/ into /app so runtime imports work
+    # (app was cloned from git; external is gitignored)
+    if os.path.exists("/app/external"):
+        shutil.rmtree("/app/external")
+    shutil.copytree("/opt/lam_external", "/app/external")
+    print("[BUILD] external copied into /app/external (with NMS .so)")
+
+
+image = image.run_function(
+    _bake_wheels_and_external,
+    volumes={"/vol": volume},
+)
+
+
 # ==================== Helper Functions (run inside container) ====================
 
 def _verify_model_safetensors():
@@ -209,14 +292,12 @@ def _verify_model_safetensors():
     print(f"[VERIFY OK] SHA256 = {got}")
 
 
-def _setup_symlinks():
-    """Symlink Volume paths onto /app to match ModelScope app.py exactly."""
+def _setup_symlinks_runtime():
+    """Symlink Volume paths onto /app (only data, external/wheels are baked)."""
     mappings = [
         ("/vol/exps", "/app/exps"),
         ("/vol/pretrained_models", "/app/pretrained_models"),
         ("/vol/assets/sample_motion", "/app/assets/sample_motion"),
-        ("/vol/external", "/app/external"),
-        ("/vol/wheels", "/app/wheels"),
         ("/vol/blender-4.0.2-linux-x64.tar.xz", "/app/blender-4.0.2-linux-x64.tar.xz"),
     ]
     for src, dst in mappings:
@@ -419,25 +500,20 @@ class Generator:
     @modal.enter()
     def setup(self):
         print("=" * 70)
-        print("LAM-Modal Container Setup")
+        print("LAM-Modal Container Setup (runtime)")
         print("=" * 70)
 
-        # 1. Symlink Volume → /app (matching ModelScope paths)
-        _setup_symlinks()
+        # 1. Symlink Volume → /app for model weights and sample motion
+        #    (wheels/external already baked into image at build time)
+        _setup_symlinks_runtime()
 
         # 2. Verify model.safetensors SHA256 (abort if wrong)
         _verify_model_safetensors()
 
-        # 3. Extract Blender
+        # 3. Extract Blender if not already (from Volume)
         _extract_blender()
 
-        # 4. Install wheels + nvdiffrast (source)
-        _install_wheels_and_nvdiffrast()
-
-        # 5. Build NMS Cython extension
-        _build_nms_cython()
-
-        # 6. Set env vars (matching ModelScope app.py launch_gradio_app())
+        # 4. Set env vars (matching ModelScope app.py launch_gradio_app())
         os.chdir("/app")
         sys.path.insert(0, "/app")
         os.environ.update({
@@ -448,14 +524,14 @@ class Generator:
             "NUMBA_THREADING_LAYER": "forseq",
         })
 
-        # 7. Load LAM model
+        # 5. Load LAM model
         print("[LAM] Building model from checkpoint...")
         self.cfg, _ = _parse_configs()
         self.lam = _build_model(self.cfg)
         self.lam.to("cuda")
         print("[LAM] loaded to CUDA")
 
-        # 8. Load FlameTracking (paths match ModelScope app.py lines 666-671)
+        # 6. Load FlameTracking (paths match ModelScope app.py lines 666-671)
         from flame_tracking_single_image import FlameTrackingSingleImage
         self.flametracking = FlameTrackingSingleImage(
             output_dir="tracking_output",
