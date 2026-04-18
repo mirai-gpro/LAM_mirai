@@ -777,3 +777,44 @@ def web():
     demo.max_file_size = None
     demo.queue()
     return gr.routes.App.create_app(demo)
+
+
+# ==================== CLI Test (bypass UI, test Generator directly) ====================
+
+@app.local_entrypoint()
+def test():
+    """Test the Generator pipeline without UI. Logs appear in terminal.
+
+    Usage: modal run modal_app.py
+    """
+    print("=== Testing Generator pipeline (no UI) ===")
+    print("This calls Generator().generate.remote() directly.")
+    print("Generator container logs will appear here.")
+
+    # Use a tiny test image (1x1 white pixel PNG)
+    import struct, zlib
+    def make_png():
+        raw = b"\x00\xff\xff\xff"
+        compressed = zlib.compress(raw)
+        ihdr = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+        def chunk(ctype, data):
+            c = ctype + data
+            return struct.pack(">I", len(data)) + c + struct.pack(">I", zlib.crc32(c) & 0xffffffff)
+        return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", compressed) + chunk(b"IEND", b"")
+
+    img_bytes = make_png()
+    print(f"Test image: {len(img_bytes)} bytes (1x1 white PNG)")
+    print("Calling Generator().generate.remote()...")
+    print("(Generator cold start: ~30-60s for model loading)")
+    print()
+
+    try:
+        video_name, zip_name = Generator().generate.remote(
+            img_bytes, "GEM", False
+        )
+        print(f"\n=== SUCCESS ===")
+        print(f"Video: {video_name}")
+        print(f"ZIP: {zip_name}")
+    except Exception as e:
+        print(f"\n=== FAILED ===")
+        print(f"Error: {e}")
