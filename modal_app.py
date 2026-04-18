@@ -141,8 +141,10 @@ image = (
         "gradio==4.44.0", "gradio-client==1.3.0", "fastapi",
     )
     # Clone LAM_mirai source code from GitHub
+    # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
+    # would 404; the real file comes from the Volume via symlink anyway)
     .run_commands(
-        f"git clone -b {GITHUB_BRANCH} --depth 1 {GITHUB_REPO} /app",
+        f"GIT_LFS_SKIP_SMUDGE=1 git clone -b {GITHUB_BRANCH} --depth 1 {GITHUB_REPO} /app",
     )
     # Disable @torch.compile decorators (sed on cloned repo)
     .run_commands(
