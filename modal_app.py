@@ -792,49 +792,47 @@ def web():
 
 # ==================== CLI Test (bypass UI, test Generator directly) ====================
 
+@app.function(image=image)
+def get_sample_image(name: str) -> bytes:
+    """Fetch a sample image from /app/assets/sample_input/ (baked from git clone)."""
+    import os
+    for ext in [".png", ".jpg", ".jpeg"]:
+        path = f"/app/assets/sample_input/{name}{ext}"
+        if os.path.isfile(path):
+            return open(path, "rb").read()
+    raise FileNotFoundError(f"Sample '{name}' not found in /app/assets/sample_input/")
+
+
 @app.local_entrypoint()
 def test(image: str = "messi"):
     """Test the Generator pipeline without UI. Logs appear in terminal.
 
     Usage:
-        modal run modal_app.py                    # uses messi.png
+        modal run modal_app.py                    # uses messi.png (from Modal container)
         modal run modal_app.py --image status     # uses status.png
         modal run modal_app.py --image C:\\path\\to\\local.jpg  # local file
 
-    Available samples (from assets/sample_input/ in repo):
+    Available samples (from assets/sample_input/ in repo, fetched from Modal container):
         messi, status, james, cluo, dufu, libai, barbara, pop, musk, speed, zhouxingchi
     """
     import os
 
     print("=== Testing Generator pipeline (no UI) ===")
 
-    # Resolve image: local file path, or sample name
+    # Resolve image: local file path, or sample name (fetched from Modal container)
     if os.path.isfile(image):
-        local_path = image
+        with open(image, "rb") as f:
+            img_bytes = f.read()
+        print(f"Input: {image} (local file, {len(img_bytes):,} bytes)")
     else:
-        # Map short name to sample file (repo path)
-        samples_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "assets", "sample_input"
-        )
-        # Try common extensions
-        found = None
-        for ext in [".png", ".jpg", ".jpeg"]:
-            candidate = os.path.join(samples_dir, image + ext)
-            if os.path.isfile(candidate):
-                found = candidate
-                break
-        if not found:
-            # Try reading from repo-local assets (if running outside the repo)
-            print(f"ERROR: '{image}' not found as local file or sample name.")
-            print(f"Looked in: {samples_dir}")
+        print(f"Fetching sample '{image}' from Modal container /app/assets/sample_input/...")
+        try:
+            img_bytes = get_sample_image.remote(image)
+        except Exception as e:
+            print(f"ERROR: {e}")
             print("Available: messi, status, james, cluo, dufu, libai, barbara, pop, musk, speed, zhouxingchi")
             return
-        local_path = found
-
-    with open(local_path, "rb") as f:
-        img_bytes = f.read()
-
-    print(f"Input image: {local_path} ({len(img_bytes):,} bytes)")
+        print(f"Input: /app/assets/sample_input/{image}.* ({len(img_bytes):,} bytes)")
     print("Calling Generator().generate.remote() with motion='GEM'...")
     print("(First call: Generator cold start ~30-60s + tracking ~30s + inference ~30s)")
     print()
