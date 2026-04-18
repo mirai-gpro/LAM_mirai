@@ -113,7 +113,7 @@ image = (
         "open3d==0.19.0",
         "opencv-python",
         "opencv-python-headless",
-        "Pillow>=10.0.0,<11.0",
+        "Pillow>=10.0.0",
         "plyfile",
         "pygltflib==1.16.2",
         "pyrender==0.1.45",
@@ -138,7 +138,7 @@ image = (
         "patool",
         "safetensors",
         # Gradio
-        "gradio==4.44.1", "gradio-client==1.3.0", "fastapi", "jinja2==3.1.4",
+        "gradio>=5.0.0,<6.0.0", "fastapi",
     )
     # Clone LAM_mirai source code from GitHub
     # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
@@ -633,9 +633,10 @@ class Generator:
     timeout=3600,
     scaledown_window=600,
 )
-@modal.web_server(port=7860, startup_timeout=120)
+@modal.concurrent(max_inputs=10)
+@modal.asgi_app()
 def web():
-    """Gradio UI served via its own uvicorn server (avoids starlette/jinja2 conflict)."""
+    """Gradio UI served as ASGI app (gradio 5.x avoids the 4.44 jinja2 crash)."""
     import gradio as gr
 
     MOTION_CHOICES = [
@@ -692,4 +693,5 @@ def web():
             outputs=[out_video, out_zip],
         )
 
-    demo.launch(server_name="0.0.0.0", server_port=7860)
+    # Return the gradio Blocks as an ASGI app (gradio 5.x supports this directly)
+    return gr.routes.App.create_app(demo)
