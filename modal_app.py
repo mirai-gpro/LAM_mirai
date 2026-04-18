@@ -138,7 +138,7 @@ image = (
         "patool",
         "safetensors",
         # Gradio
-        "gradio==4.44.1", "gradio-client==1.3.0", "fastapi", "jinja2<3.1.6",
+        "gradio==4.44.1", "gradio-client==1.3.0", "fastapi", "jinja2==3.1.4",
     )
     # Clone LAM_mirai source code from GitHub
     # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
