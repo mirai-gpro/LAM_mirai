@@ -710,7 +710,11 @@ class Generator:
     volumes={"/vol_out": output_vol},
     timeout=3600,
     scaledown_window=600,
+    # Pin to ONE container so Gradio's in-memory session state is consistent
+    # across upload / queue/join / queue/data requests
+    max_containers=1,
 )
+@modal.concurrent(max_inputs=100)
 @modal.asgi_app()
 def web():
     """Gradio UI (starlette==0.40.0 avoids the old TemplateResponse crash)."""
