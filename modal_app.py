@@ -113,7 +113,7 @@ image = (
         "open3d==0.19.0",
         "opencv-python",
         "opencv-python-headless",
-        "Pillow>=10.0.0",
+        "Pillow>=10.0.0,<11.0",
         "plyfile",
         "pygltflib==1.16.2",
         "pyrender==0.1.45",
@@ -138,7 +138,7 @@ image = (
         "patool",
         "safetensors",
         # Gradio
-        "gradio>=5.0.0,<6.0.0", "fastapi",
+        "gradio==4.44.1", "gradio-client==1.3.0", "fastapi",
     )
     # Clone LAM_mirai source code from GitHub
     # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
@@ -167,6 +167,19 @@ image = (
     )
     # Final numpy re-pin in case any pip install bumped it
     .run_commands("pip install 'numpy==1.23.0' --force-reinstall")
+    # Patch jinja2 LRUCache.get: catch TypeError for unhashable dict keys
+    # (starlette passes dict globals to jinja2 template cache → TypeError)
+    .run_commands(
+        "python3 -c \""
+        "import jinja2.utils, inspect; "
+        "src = inspect.getfile(jinja2.utils); "
+        "code = open(src).read(); "
+        "code = code.replace("
+        "'except KeyError:', "
+        "'except (KeyError, TypeError):'); "
+        "open(src, 'w').write(code); "
+        "print('[PATCH] jinja2 LRUCache: TypeError now caught in get()')\"",
+    )
 )
 
 
@@ -626,6 +639,59 @@ class Generator:
 
 
 # ==================== Gradio Web UI ====================
+# Strategy:
+#   1. gradio 4.44.1 (compatible with huggingface_hub==0.23.2)
+#   2. jinja2 LRUCache patched in image build (TypeError caught)
+#   3. uvicorn runs gradio ASGI app directly (bypasses demo.launch localhost check)
+
+GRADIO_ENTRY = r'''
+import sys, os
+sys.path.insert(0, "/app")
+os.chdir("/app")
+import gradio as gr
+
+MOTION_CHOICES = [
+    "Speeding_Scandal", "Look_In_My_Eyes", "D_ANgelo_Dinero",
+    "Michael_Wayne_Rosen", "I_Am_Iron_Man", "Anti_Drugs",
+    "Pen_Pineapple_Apple_Pen", "Taylor_Swift", "GEM",
+    "The_Shawshank_Redemption",
+]
+
+def predict(image_file, motion_name, enable_oac):
+    if image_file is None:
+        raise gr.Error("Please upload an image first.")
+    # Import here to avoid circular import at script level
+    import modal
+    Generator = modal.Cls.from_name("lam-mirai", "Generator")
+    with open(image_file, "rb") as f:
+        img_bytes = f.read()
+    video_name, zip_name = Generator().generate.remote(img_bytes, motion_name, enable_oac)
+    video_path = f"/vol_out/{video_name}" if video_name else None
+    zip_path = f"/vol_out/{zip_name}" if zip_name else None
+    return video_path, zip_path
+
+with gr.Blocks(title="LAM on Modal (ModelScope reproduction)") as demo:
+    gr.Markdown(
+        "# LAM: Large Avatar Model - Modal Edition\n"
+        "Exact reproduction of the ModelScope Studio pipeline. "
+        "Drop an image, pick a motion, generate an animated avatar (+ optional OAC ZIP)."
+    )
+    with gr.Row():
+        with gr.Column(scale=1):
+            input_img = gr.Image(type="filepath", label="Input Image", sources=["upload"], height=480)
+            motion_choice = gr.Dropdown(choices=MOTION_CHOICES, value="GEM", label="Motion Template")
+            enable_oac = gr.Checkbox(label="Export ZIP for Chatting Avatar (OAC)", value=False)
+            btn = gr.Button("Generate", variant="primary")
+        with gr.Column(scale=1):
+            out_video = gr.Video(label="Rendered Video", autoplay=True)
+            out_zip = gr.File(label="Output ZIP")
+    btn.click(predict, inputs=[input_img, motion_choice, enable_oac], outputs=[out_video, out_zip])
+
+# Run uvicorn directly with gradio's ASGI app (bypass demo.launch localhost check)
+import uvicorn
+uvicorn.run(gr.routes.App.create_app(demo), host="0.0.0.0", port=7860)
+'''
+
 
 @app.function(
     image=image,
@@ -633,65 +699,14 @@ class Generator:
     timeout=3600,
     scaledown_window=600,
 )
-@modal.concurrent(max_inputs=10)
-@modal.asgi_app()
+@modal.web_server(port=7860, startup_timeout=120)
 def web():
-    """Gradio UI served as ASGI app (gradio 5.x avoids the 4.44 jinja2 crash)."""
-    import gradio as gr
+    """Start Gradio UI via subprocess (uvicorn direct, no demo.launch)."""
+    import subprocess, sys, tempfile
 
-    MOTION_CHOICES = [
-        "Speeding_Scandal", "Look_In_My_Eyes", "D_ANgelo_Dinero",
-        "Michael_Wayne_Rosen", "I_Am_Iron_Man", "Anti_Drugs",
-        "Pen_Pineapple_Apple_Pen", "Taylor_Swift", "GEM",
-        "The_Shawshank_Redemption",
-    ]
-
-    def predict(image_file, motion_name, enable_oac):
-        if image_file is None:
-            raise gr.Error("Please upload an image first.")
-        with open(image_file, "rb") as f:
-            img_bytes = f.read()
-
-        video_name, zip_name = Generator().generate.remote(
-            img_bytes, motion_name, enable_oac
-        )
-
-        output_vol.reload()
-
-        video_path = f"/vol_out/{video_name}" if video_name else None
-        zip_path = f"/vol_out/{zip_name}" if zip_name else None
-        return video_path, zip_path
-
-    with gr.Blocks(title="LAM on Modal (ModelScope reproduction)") as demo:
-        gr.Markdown(
-            "# LAM: Large Avatar Model — Modal Edition\n"
-            "Exact reproduction of the ModelScope Studio pipeline. "
-            "Drop an image, pick a motion, generate an animated avatar (+ optional OAC ZIP)."
-        )
-        with gr.Row():
-            with gr.Column(scale=1):
-                input_img = gr.Image(
-                    type="filepath", label="Input Image",
-                    sources=["upload"], height=480,
-                )
-                motion_choice = gr.Dropdown(
-                    choices=MOTION_CHOICES,
-                    value="GEM",
-                    label="Motion Template",
-                )
-                enable_oac = gr.Checkbox(
-                    label="Export ZIP for Chatting Avatar (OAC)", value=False,
-                )
-                btn = gr.Button("Generate", variant="primary")
-            with gr.Column(scale=1):
-                out_video = gr.Video(label="Rendered Video", autoplay=True)
-                out_zip = gr.File(label="Output ZIP")
-
-        btn.click(
-            predict,
-            inputs=[input_img, motion_choice, enable_oac],
-            outputs=[out_video, out_zip],
-        )
-
-    # Return the gradio Blocks as an ASGI app (gradio 5.x supports this directly)
-    return gr.routes.App.create_app(demo)
+    script = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".py", delete=False, dir="/tmp"
+    )
+    script.write(GRADIO_ENTRY)
+    script.close()
+    subprocess.Popen([sys.executable, "-u", script.name])
