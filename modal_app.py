@@ -633,23 +633,10 @@ class Generator:
     timeout=3600,
     scaledown_window=600,
 )
-@modal.concurrent(max_inputs=10)
-@modal.asgi_app()
+@modal.web_server(port=7860, startup_timeout=120)
 def web():
-    """Gradio UI entrypoint - served as an ASGI app at /."""
+    """Gradio UI served via its own uvicorn server (avoids starlette/jinja2 conflict)."""
     import gradio as gr
-    from fastapi import FastAPI
-    from fastapi.responses import FileResponse
-
-    api = FastAPI()
-
-    # Serve files from /vol_out
-    @api.get("/file/{filename}")
-    def serve_file(filename: str):
-        path = f"/vol_out/{filename}"
-        if not os.path.isfile(path):
-            return {"error": "not found"}
-        return FileResponse(path)
 
     MOTION_CHOICES = [
         "Speeding_Scandal", "Look_In_My_Eyes", "D_ANgelo_Dinero",
@@ -668,7 +655,6 @@ def web():
             img_bytes, motion_name, enable_oac
         )
 
-        # Reload volume to see newly committed files
         output_vol.reload()
 
         video_path = f"/vol_out/{video_name}" if video_name else None
@@ -706,4 +692,4 @@ def web():
             outputs=[out_video, out_zip],
         )
 
-    return gr.mount_gradio_app(api, demo, path="/")
+    demo.launch(server_name="0.0.0.0", server_port=7860)
