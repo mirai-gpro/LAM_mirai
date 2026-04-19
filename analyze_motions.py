@@ -5,8 +5,9 @@ import json
 
 app = modal.App("lam-motion-analysis")
 volume = modal.Volume.from_name("lam-data", create_if_missing=False)
+image = modal.Image.debian_slim(python_version="3.10").pip_install("numpy")
 
-@app.function(volumes={"/vol": volume}, timeout=120)
+@app.function(volumes={"/vol": volume}, timeout=120, image=image)
 def analyze_motions():
     import numpy as np
 
