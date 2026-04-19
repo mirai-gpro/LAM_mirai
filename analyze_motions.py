@@ -13,22 +13,10 @@ def analyze():
 
     results = []
     for m in motions:
-        fp_dir = os.path.join(base, m, "flame_param")
         fp_json = os.path.join(base, m, "flame_params.json")
+        fp_dir = os.path.join(base, m, "flame_param")
 
-        if os.path.isdir(fp_dir):
-            files = sorted([f for f in os.listdir(fp_dir) if f.endswith('.json')])
-            frames = len(files)
-            if files:
-                with open(os.path.join(fp_dir, files[0])) as f:
-                    d = json.load(f)
-                expr = d.get("expression", d.get("expr", []))
-                rot = d.get("rotation", d.get("pose", []))
-                trans = d.get("translation", [])
-                results.append((m, frames, len(expr), len(rot), len(trans)))
-            else:
-                results.append((m, 0, 0, 0, 0))
-        elif os.path.isfile(fp_json):
+        if os.path.isfile(fp_json):
             with open(fp_json) as f:
                 d = json.load(f)
             if isinstance(d, dict):
@@ -44,6 +32,9 @@ def analyze():
                 trans = d.get("translation", [])
                 trans_dim = len(trans[0]) if trans and isinstance(trans[0], list) else len(trans)
                 results.append((m, frames, expr_dim, rot_dim, trans_dim))
+        elif os.path.isdir(fp_dir):
+            files = sorted(os.listdir(fp_dir))
+            results.append((m, len(files), "?", "?", "?"))
         else:
             results.append((m, "N/A", "?", "?", "?"))
 
