@@ -842,7 +842,7 @@ def test(image: str = "messi"):
 
     try:
         video_name, zip_name = Generator().generate.remote(
-            img_bytes, "GEM", False
+            img_bytes, "GEM", True
         )
         print(f"\n=== SUCCESS ===")
         print(f"Video: {video_name}")
