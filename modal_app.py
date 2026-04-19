@@ -147,8 +147,11 @@ image = (
     # Clone LAM_mirai source code from GitHub
     # GIT_LFS_SKIP_SMUDGE=1: skip LFS download (model.safetensors LFS pointer
     # would 404; the real file comes from the Volume via symlink anyway)
+    # force_build=True ensures we always get the latest commit on the branch
+    # (so newly-added sample images are picked up).
     .run_commands(
         f"GIT_LFS_SKIP_SMUDGE=1 git clone -b {GITHUB_BRANCH} --depth 1 {GITHUB_REPO} /app",
+        force_build=True,
     )
     # Disable @torch.compile decorators (sed on cloned repo)
     .run_commands(
@@ -804,7 +807,7 @@ def get_sample_image(name: str) -> bytes:
 
 
 @app.local_entrypoint()
-def test(image: str = "messi"):
+def test(image: str = "sample"):
     """Test the Generator pipeline without UI. Logs appear in terminal.
 
     Usage:
@@ -839,7 +842,7 @@ def test(image: str = "messi"):
 
     try:
         video_name, zip_name = Generator().generate.remote(
-            img_bytes, "GEM", False
+            img_bytes, "GEM", True
         )
         print(f"\n=== SUCCESS ===")
         print(f"Video: {video_name}")
