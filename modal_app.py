@@ -807,7 +807,7 @@ def get_sample_image(name: str) -> bytes:
 
 
 @app.local_entrypoint()
-def test(image: str = "messi"):
+def test(image: str = "sample"):
     """Test the Generator pipeline without UI. Logs appear in terminal.
 
     Usage:
