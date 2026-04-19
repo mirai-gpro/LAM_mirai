@@ -1,91 +1,72 @@
-"""Quick analysis of flame_params.json for all 12 motions in the Volume."""
+"""Analyze flame_params.json for all motions in the Volume. No numpy needed."""
 import modal
 import os
 import json
 
-app = modal.App("lam-motion-analysis")
+app = modal.App("lam-motion-analysis-v2")
 volume = modal.Volume.from_name("lam-data", create_if_missing=False)
-image = modal.Image.debian_slim(python_version="3.10").pip_install("numpy")
 
-@app.function(volumes={"/vol": volume}, timeout=120, image=image)
-def analyze_motions():
-    import numpy as np
-
+@app.function(volumes={"/vol": volume}, timeout=120)
+def analyze():
     base = "/vol/assets/sample_motion/export"
     motions = sorted([d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))])
 
-    print(f"{'Motion':<30} {'Frames':>7} {'Expr dim':>9} {'Rot dim':>8} {'Trans dim':>10} {'Expr range':>20} {'Rot range':>20} {'Trans range':>20}")
-    print("-" * 130)
-
+    results = []
     for m in motions:
-        fp = os.path.join(base, m, "flame_params.json")
-        if not os.path.isfile(fp):
-            # Try flame_param directory
-            fp_dir = os.path.join(base, m, "flame_param")
-            if os.path.isdir(fp_dir):
-                # Count json files in flame_param/
-                frames = len([f for f in os.listdir(fp_dir) if f.endswith('.json')])
-                # Read first frame to get dimensions
-                first = sorted([f for f in os.listdir(fp_dir) if f.endswith('.json')])[0]
-                with open(os.path.join(fp_dir, first)) as f:
-                    data = json.load(f)
-                expr_dim = len(data.get("expression", data.get("expr", [])))
-                rot_dim = len(data.get("rotation", data.get("pose", [])))
-                trans_dim = len(data.get("translation", []))
-                print(f"{m:<30} {frames:>7} {expr_dim:>9} {rot_dim:>8} {trans_dim:>10} {'(per-frame)':>20} {'(per-frame)':>20} {'(per-frame)':>20}")
+        fp_dir = os.path.join(base, m, "flame_param")
+        fp_json = os.path.join(base, m, "flame_params.json")
+
+        if os.path.isdir(fp_dir):
+            files = sorted([f for f in os.listdir(fp_dir) if f.endswith('.json')])
+            frames = len(files)
+            if files:
+                with open(os.path.join(fp_dir, files[0])) as f:
+                    d = json.load(f)
+                expr = d.get("expression", d.get("expr", []))
+                rot = d.get("rotation", d.get("pose", []))
+                trans = d.get("translation", [])
+                results.append((m, frames, len(expr), len(rot), len(trans)))
             else:
-                print(f"{m:<30} {'N/A':>7}")
-            continue
+                results.append((m, 0, 0, 0, 0))
+        elif os.path.isfile(fp_json):
+            with open(fp_json) as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                expr = d.get("expression", d.get("expr", []))
+                if isinstance(expr[0], list):
+                    frames = len(expr)
+                    expr_dim = len(expr[0])
+                else:
+                    frames = 1
+                    expr_dim = len(expr)
+                rot = d.get("rotation", d.get("pose", []))
+                rot_dim = len(rot[0]) if isinstance(rot[0], list) else len(rot)
+                trans = d.get("translation", [])
+                trans_dim = len(trans[0]) if trans and isinstance(trans[0], list) else len(trans)
+                results.append((m, frames, expr_dim, rot_dim, trans_dim))
+        else:
+            results.append((m, "N/A", "?", "?", "?"))
 
-        with open(fp) as f:
-            data = json.load(f)
+    # Print table
+    print(f"\n{'#':<4} {'Motion':<32} {'Frames':>7} {'Expr':>6} {'Rot':>6} {'Trans':>6}")
+    print("-" * 65)
+    for i, (m, frames, e, r, t) in enumerate(results, 1):
+        print(f"{i:<4} {m:<32} {frames:>7} {e:>6} {r:>6} {t:>6}")
 
-        # flame_params.json can have different structures
-        if isinstance(data, list):
-            frames = len(data)
-            if frames > 0:
-                sample = data[0]
-                expr = sample.get("expression", sample.get("expr", []))
-                rot = sample.get("rotation", sample.get("pose", []))
-                trans = sample.get("translation", [])
-        elif isinstance(data, dict):
-            # Could be {expression: [[...], [...]], rotation: [[...]], ...}
-            expr_key = "expression" if "expression" in data else "expr"
-            rot_key = "rotation" if "rotation" in data else "pose"
-            trans_key = "translation"
-
-            expr_arr = np.array(data.get(expr_key, []))
-            rot_arr = np.array(data.get(rot_key, []))
-            trans_arr = np.array(data.get(trans_key, []))
-
-            if expr_arr.ndim == 2:
-                frames = expr_arr.shape[0]
-                expr_dim = expr_arr.shape[1]
-                rot_dim = rot_arr.shape[1] if rot_arr.ndim == 2 else 0
-                trans_dim = trans_arr.shape[1] if trans_arr.ndim == 2 else 0
-                expr_range = f"[{expr_arr.min():.3f}, {expr_arr.max():.3f}]"
-                rot_range = f"[{rot_arr.min():.3f}, {rot_arr.max():.3f}]" if rot_arr.size else "N/A"
-                trans_range = f"[{trans_arr.min():.4f}, {trans_arr.max():.4f}]" if trans_arr.size else "N/A"
-                print(f"{m:<30} {frames:>7} {expr_dim:>9} {rot_dim:>8} {trans_dim:>10} {expr_range:>20} {rot_range:>20} {trans_range:>20}")
-                continue
+    # Also list available files per motion
+    print(f"\n--- Files per motion (first one) ---")
+    first = motions[0] if motions else None
+    if first:
+        path = os.path.join(base, first)
+        for f in sorted(os.listdir(path)):
+            fp = os.path.join(path, f)
+            if os.path.isfile(fp):
+                sz = os.path.getsize(fp)
+                print(f"  {f:<45} {sz:>12,} bytes")
             else:
-                frames = "?"
-                expr = data.get(expr_key, [])
-                rot = data.get(rot_key, [])
-                trans = data.get(trans_key, [])
-
-        print(f"{m:<30} {frames:>7}")
-
-    # Also check canonical params
-    print("\n--- Canonical FLAME params ---")
-    for m in motions:
-        cp = os.path.join(base, m, "canonical_flame_param.npz")
-        if os.path.isfile(cp):
-            npz = np.load(cp)
-            keys = list(npz.keys())
-            shapes = {k: npz[k].shape for k in keys}
-            print(f"{m:<30} {shapes}")
+                count = len(os.listdir(fp))
+                print(f"  {f + '/':<45} {count} files")
 
 @app.local_entrypoint()
 def main():
-    analyze_motions.remote()
+    analyze.remote()
