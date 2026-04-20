@@ -163,6 +163,9 @@ image = (
         "/app/lam/losses/tvloss.py",
         "sed -i 's/^    @torch.compile$/    # @torch.compile  # DISABLED/' "
         "/app/lam/losses/pixelwise.py",
+        # Remove raster debug prints (drowns out important OAC/error messages)
+        "sed -i '/=== raster debug ===/,/features/d' "
+        "/app/lam/models/rendering/gs_renderer.py",
     )
     # Pre-cache DINOv2 weights
     .run_commands(
@@ -563,6 +566,7 @@ class Generator:
     @modal.method()
     def generate(self, image_bytes: bytes, motion_name: str, enable_oac_file: bool):
         """Run LAM inference. Mirrors app.py core_fn() (lines 311-471)."""
+        print(f"[DEBUG] enable_oac_file={enable_oac_file}", flush=True)
         from datetime import datetime
         from pathlib import Path
 
@@ -693,8 +697,11 @@ class Generator:
 
         # --- OAC ZIP (optional) ---
         output_zip_name = None
+        print(f"[DEBUG] entering OAC block: enable_oac_file={enable_oac_file}", flush=True)
         if enable_oac_file:
+            print("[DEBUG] OAC block entered", flush=True)
             try:
+                os.chdir("/app")  # ensure cwd for relative paths
                 sys.path.insert(0, "/app")
                 from generateARKITGLBWithBlender import generate_glb
 
@@ -704,10 +711,86 @@ class Generator:
                 saved_head = self.lam.renderer.flame_model.save_shaped_mesh(
                     shape_param.unsqueeze(0).cuda(), fd=oac_dir,
                 )
+
+                # === 案4: 出力メッシュ頂点を直接補正 ===
+                # FLAME テンプレートの欧米人バイアスを後処理で補正
+                import trimesh as _trimesh
+
+                _mesh = _trimesh.load(saved_head)
+                _verts = _mesh.vertices.copy()  # (N, 3) numpy array
+
+                # FLAME_masks.pkl から領域マスクを取得
+                _masks_path = "./pretrained_models/human_model_files/flame_assets/flame/FLAME_masks.pkl"
+                _part_masks = np.load(_masks_path, allow_pickle=True, encoding="latin1")
+
+                # 頂点数の違い (subdivided mesh vs original) に対応
+                # save_shaped_mesh は subdivided (20018頂点)、FLAME_masks は original (5023頂点)
+                # subdivide 前の頂点インデックスはそのまま使える (先頭5023個が元の頂点)
+                _n_orig = 5023
+
+                # ① 鼻周辺: X方向拡大 (鼻幅復元)
+                _nose_idx = _part_masks["nose"]
+                _nose_idx = _nose_idx[_nose_idx < _n_orig]
+                _nose_center_x = _verts[_nose_idx, 0].mean()
+                _verts[_nose_idx, 0] = _nose_center_x + (_verts[_nose_idx, 0] - _nose_center_x) * 1.3
+                print(f"[案4] nose vertices ({len(_nose_idx)}): X scaled 1.3x from center")
+
+                # ② 頬 (face - nose - lips - eye_region): Y方向縮小
+                _face_idx = _part_masks["face"]
+                _face_idx = _face_idx[_face_idx < _n_orig]
+                _exclude = set()
+                for _region in ["nose", "lips", "eye_region", "forehead"]:
+                    _r = _part_masks[_region]
+                    _exclude.update(_r[_r < _n_orig].tolist())
+                _cheek_idx = np.array([i for i in _face_idx if i not in _exclude])
+                _cheek_center_y = _verts[_cheek_idx, 1].mean()
+                _verts[_cheek_idx, 1] = _cheek_center_y + (_verts[_cheek_idx, 1] - _cheek_center_y) * 0.88
+                print(f"[案4] cheek vertices ({len(_cheek_idx)}): Y scaled 0.9x from center")
+
+                # ③ 人中 (lips の上半分): Y方向上にシフト
+                _lips_idx = _part_masks["lips"]
+                _lips_idx = _lips_idx[_lips_idx < _n_orig]
+                _lips_center_y = _verts[_lips_idx, 1].mean()
+                _upper_lip_idx = _lips_idx[_verts[_lips_idx, 1] > _lips_center_y]
+                _verts[_upper_lip_idx, 1] += 0.003
+                print(f"[案4] upper lip vertices ({len(_upper_lip_idx)}): Y shifted +0.003")
+
+                # 補正済みメッシュを保存
+                _mesh.vertices = _verts
+                _mesh.export(saved_head)
+                print(f"[案4] corrected mesh saved to {saved_head}")
+                # === 案4ここまで ===
+
+                # offset.ply を保存してから同じ変形を適用
+                _ply_path = os.path.join(oac_dir, "offset.ply")
                 res["cano_gs_lst"][0].save_ply(
-                    os.path.join(oac_dir, "offset.ply"),
-                    rgb2sh=False, offset2xyz=True,
+                    _ply_path, rgb2sh=False, offset2xyz=True,
                 )
+
+                # === 案4-ply: Gaussian 点群にも同じ変形を適用 ===
+                from plyfile import PlyData, PlyElement
+                _ply = PlyData.read(_ply_path)
+                _gx = _ply['vertex']['x'].copy()
+                _gy = _ply['vertex']['y'].copy()
+                _gz = _ply['vertex']['z'].copy()
+
+                # ① 鼻: X方向拡大 (メッシュと同じ変形)
+                _nose_center_x_g = _gx[_nose_idx].mean()
+                _gx[_nose_idx] = _nose_center_x_g + (_gx[_nose_idx] - _nose_center_x_g) * 1.3
+
+                # ② 頬: Y方向縮小
+                _cheek_center_y_g = _gy[_cheek_idx].mean()
+                _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.88
+
+                # ③ 人中: Y方向シフト
+                _gy[_upper_lip_idx] += 0.003
+
+                _ply['vertex']['x'] = _gx
+                _ply['vertex']['y'] = _gy
+                _ply['vertex']['z'] = _gz
+                _ply.write(_ply_path)
+                print(f"[案4-ply] offset.ply corrected (same transforms as mesh)")
+                # === 案4-ply ここまで ===
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
@@ -729,7 +812,9 @@ class Generator:
                 shutil.rmtree(oac_dir)
                 print(f"[OAC] ZIP -> {zip_out}")
             except Exception as e:
-                print(f"[OAC] ERROR: {e}")
+                import traceback
+                print(f"[OAC] ERROR: {e}", flush=True)
+                print(traceback.format_exc(), flush=True)
                 output_zip_name = None
 
         # --- Video + audio ---
