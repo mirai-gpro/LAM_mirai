@@ -163,9 +163,6 @@ image = (
         "/app/lam/losses/tvloss.py",
         "sed -i 's/^    @torch.compile$/    # @torch.compile  # DISABLED/' "
         "/app/lam/losses/pixelwise.py",
-        # Remove raster debug prints (drowns out important OAC/error messages)
-        "sed -i '/=== raster debug ===/,/features/d' "
-        "/app/lam/models/rendering/gs_renderer.py",
     )
     # Pre-cache DINOv2 weights
     .run_commands(
