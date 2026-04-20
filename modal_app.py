@@ -753,10 +753,37 @@ class Generator:
                 _mesh.export(saved_head)
                 print(f"[案4] corrected mesh saved to {saved_head}")
                 # === 案4ここまで ===
+
+                # offset.ply を保存してから同じ変形を適用
+                _ply_path = os.path.join(oac_dir, "offset.ply")
                 res["cano_gs_lst"][0].save_ply(
-                    os.path.join(oac_dir, "offset.ply"),
-                    rgb2sh=False, offset2xyz=True,
+                    _ply_path, rgb2sh=False, offset2xyz=True,
                 )
+
+                # === 案4-ply: Gaussian 点群にも同じ変形を適用 ===
+                from plyfile import PlyData, PlyElement
+                _ply = PlyData.read(_ply_path)
+                _gx = _ply['vertex']['x'].copy()
+                _gy = _ply['vertex']['y'].copy()
+                _gz = _ply['vertex']['z'].copy()
+
+                # ① 鼻: X方向拡大 (メッシュと同じ変形)
+                _nose_center_x_g = _gx[_nose_idx].mean()
+                _gx[_nose_idx] = _nose_center_x_g + (_gx[_nose_idx] - _nose_center_x_g) * 1.3
+
+                # ② 頬: Y方向縮小
+                _cheek_center_y_g = _gy[_cheek_idx].mean()
+                _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.9
+
+                # ③ 人中: Y方向シフト
+                _gy[_upper_lip_idx] += 0.003
+
+                _ply['vertex']['x'] = _gx
+                _ply['vertex']['y'] = _gy
+                _ply['vertex']['z'] = _gz
+                _ply.write(_ply_path)
+                print(f"[案4-ply] offset.ply corrected (same transforms as mesh)")
+                # === 案4-ply ここまで ===
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
