@@ -710,40 +710,58 @@ class Generator:
                 )
 
                 # === 頬 Y方向 0.88 補正 (メッシュ + Gaussian 両方) ===
+                import pickle
                 import trimesh as _trimesh
                 from plyfile import PlyData
 
-                # FLAME_masks.pkl から頬領域を特定
-                _masks_path = "/vol/pretrained_models/human_model_files/flame_assets/flame/FLAME_masks.pkl"
-                _part_masks = np.load(_masks_path, allow_pickle=True, encoding="latin1")
-                _n_orig = 5023  # subdivide前の頂点数
+                _log = lambda msg: open("/vol_out/oac_debug.txt", "a").write(msg + "\n")
+                _log("[OAC] start cheek correction")
 
-                # 頬 = face - nose - lips - eye_region - forehead
-                _face_idx = _part_masks["face"]
+                # FLAME_masks.pkl を pickle.load で読む (np.loadではなく)
+                _masks_path = "/vol/pretrained_models/human_model_files/flame_assets/flame/FLAME_masks.pkl"
+                if not os.path.exists(_masks_path):
+                    raise FileNotFoundError(f"Mask file not found: {_masks_path}")
+                with open(_masks_path, "rb") as _mf:
+                    _part_masks = pickle.load(_mf, encoding="latin1")
+                if not isinstance(_part_masks, dict):
+                    raise TypeError(f"FLAME_masks.pkl is not dict: {type(_part_masks)}")
+                _log(f"[OAC] masks loaded, keys={list(_part_masks.keys())}")
+
+                _n_orig = 5023
+                _face_idx = np.asarray(_part_masks["face"])
                 _face_idx = _face_idx[_face_idx < _n_orig]
                 _exclude = set()
                 for _region in ["nose", "lips", "eye_region", "forehead"]:
-                    _r = _part_masks[_region]
+                    _r = np.asarray(_part_masks[_region])
                     _exclude.update(_r[_r < _n_orig].tolist())
-                _cheek_idx = np.array([i for i in _face_idx if i not in _exclude])
+                _cheek_idx = np.array([i for i in _face_idx if i not in _exclude], dtype=np.int64)
+                _log(f"[OAC] cheek_idx: count={len(_cheek_idx)}, max={_cheek_idx.max()}")
 
-                # メッシュ補正
-                _mesh = _trimesh.load(saved_head)
+                # メッシュ補正 (trimesh.load_mesh + process=False)
+                _mesh = _trimesh.load_mesh(saved_head, process=False)
+                if not hasattr(_mesh, "vertices"):
+                    raise TypeError(f"saved_head is not Trimesh: {type(_mesh)}")
                 _verts = _mesh.vertices.copy()
+                _log(f"[OAC] mesh verts={len(_verts)}")
+                if _cheek_idx.max() >= len(_verts):
+                    raise ValueError(f"cheek_idx out of range: max={_cheek_idx.max()} verts={len(_verts)}")
                 _cheek_center_y = _verts[_cheek_idx, 1].mean()
                 _verts[_cheek_idx, 1] = _cheek_center_y + (_verts[_cheek_idx, 1] - _cheek_center_y) * 0.88
                 _mesh.vertices = _verts
                 _mesh.export(saved_head)
-                print(f"[CHEEK] mesh: {len(_cheek_idx)} vertices, Y *= 0.88", flush=True)
+                _log("[OAC] mesh patched OK")
 
-                # Gaussian (PLY) 補正
-                _ply = PlyData.read(_ply_path)
-                _gy = _ply['vertex']['y'].copy()
+                # Gaussian (PLY) 補正 (mmap=False + copy=True)
+                _ply = PlyData.read(_ply_path, mmap=False)
+                _gy = np.array(_ply['vertex']['y'], copy=True)
+                _log(f"[OAC] ply verts={len(_gy)}")
+                if _cheek_idx.max() >= len(_gy):
+                    raise ValueError(f"cheek_idx out of range for ply: max={_cheek_idx.max()} verts={len(_gy)}")
                 _cheek_center_y_g = _gy[_cheek_idx].mean()
                 _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.88
-                _ply['vertex']['y'] = _gy
+                _ply['vertex'].data['y'] = _gy
                 _ply.write(_ply_path)
-                print(f"[CHEEK] ply: {len(_cheek_idx)} points, Y *= 0.88", flush=True)
+                _log("[OAC] ply patched OK")
                 # === 頬補正ここまで ===
 
                 generate_glb(
