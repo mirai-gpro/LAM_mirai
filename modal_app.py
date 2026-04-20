@@ -626,11 +626,13 @@ class Generator:
 
         # === 案1: shape_param PCA 次元補正 ===
         # FLAME shape basis は欧米人データで学習されており、日本人顔を表現すると
-        # 鼻が高く・頬が縦長・人中が長い方向に歪む。上位PCA成分を補正。
+        # 鼻が高く・頬が縦長・人中が長い・額が縮小する方向に歪む。上位PCA成分を補正。
         SHAPE_CORRECTIONS = {
+            0: 0.8,    # 顔全体のスケール (額〜頭頂の縮小を抑制)
             1: 0.7,    # 顔の縦横比 (縦長化を抑制)
             2: 0.5,    # 鼻の突出度 (高すぎる鼻を抑制)
             3: 0.7,    # 顔幅/頬骨 (頬面積の変形を抑制)
+            4: 0.8,    # 額〜眉上の高さ (頭頂部縮小を抑制)
         }
         print(f"[案1] shape_param before: dims 0-4 = {shape_param[:5].tolist()}")
         for dim, scale in SHAPE_CORRECTIONS.items():
