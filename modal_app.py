@@ -805,7 +805,9 @@ class Generator:
                 shutil.rmtree(oac_dir)
                 print(f"[OAC] ZIP -> {zip_out}")
             except Exception as e:
-                print(f"[OAC] ERROR: {e}")
+                import traceback
+                print(f"[OAC] ERROR: {e}", flush=True)
+                traceback.print_exc()
                 output_zip_name = None
 
         # --- Video + audio ---
