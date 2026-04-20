@@ -163,6 +163,9 @@ image = (
         "/app/lam/losses/tvloss.py",
         "sed -i 's/^    @torch.compile$/    # @torch.compile  # DISABLED/' "
         "/app/lam/losses/pixelwise.py",
+        # Remove raster debug prints (drowns out important OAC/error messages)
+        "sed -i '/=== raster debug ===/,/features/d' "
+        "/app/lam/models/rendering/gs_renderer.py",
     )
     # Pre-cache DINOv2 weights
     .run_commands(
@@ -698,6 +701,7 @@ class Generator:
         if enable_oac_file:
             print("[DEBUG] OAC block entered", flush=True)
             try:
+                os.chdir("/app")  # ensure cwd for relative paths
                 sys.path.insert(0, "/app")
                 from generateARKITGLBWithBlender import generate_glb
 
@@ -810,7 +814,7 @@ class Generator:
             except Exception as e:
                 import traceback
                 print(f"[OAC] ERROR: {e}", flush=True)
-                traceback.print_exc()
+                print(traceback.format_exc(), flush=True)
                 output_zip_name = None
 
         # --- Video + audio ---
