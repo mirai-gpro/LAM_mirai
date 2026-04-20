@@ -775,6 +775,64 @@ class Generator:
                 _log(f"[OAC] ply spatial cheek={len(_all_cheek_g)}, patched OK")
                 # === 頬補正ここまで ===
 
+                # === 鼻補正 (メッシュ + Gaussian 両方) ===
+                # 1) 鼻幅: X方向拡大 (小鼻を広げる)
+                # 2) 鼻高さ: Z方向縮小 (突出を抑える)
+                # 3) 鼻先: Y方向上シフト (下向き尖りを戻す)
+                _nose_idx_orig = np.asarray(_part_masks["nose"])
+                _nose_idx_orig = _nose_idx_orig[_nose_idx_orig < _n_orig]
+                _nose_ref = _verts[_nose_idx_orig]
+                _nx_min, _nx_max = _nose_ref[:, 0].min(), _nose_ref[:, 0].max()
+                _ny_min, _ny_max = _nose_ref[:, 1].min(), _nose_ref[:, 1].max()
+                _nz_min, _nz_max = _nose_ref[:, 2].min(), _nose_ref[:, 2].max()
+                _nm = 0.001  # margin
+                _all_nose = np.where(
+                    (_verts[:, 0] >= _nx_min - _nm) & (_verts[:, 0] <= _nx_max + _nm) &
+                    (_verts[:, 1] >= _ny_min - _nm) & (_verts[:, 1] <= _ny_max + _nm) &
+                    (_verts[:, 2] >= _nz_min - _nm) & (_verts[:, 2] <= _nz_max + _nm)
+                )[0]
+                _log(f"[OAC] nose: orig={len(_nose_idx_orig)}, spatial={len(_all_nose)}")
+
+                # 1) 鼻幅 X拡大 (中心から外側へ 8% 拡大)
+                _nose_cx = _verts[_all_nose, 0].mean()
+                _verts[_all_nose, 0] = _nose_cx + (_verts[_all_nose, 0] - _nose_cx) * 1.08
+
+                # 2) 鼻高さ Z縮小 (最前面から後退 15%)
+                _nose_cz = _verts[_all_nose, 2].mean()
+                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.85
+
+                # 3) 鼻先 下半分を Y方向上にシフト (鼻先の下向き尖りを修正)
+                _nose_mid_y = (_ny_min + _ny_max) / 2
+                _nose_lower = _all_nose[_verts[_all_nose, 1] < _nose_mid_y]
+                _verts[_nose_lower, 1] += 0.002
+                _log(f"[OAC] nose lower tip shifted: {len(_nose_lower)} verts")
+
+                _mesh.vertices = _verts
+                _mesh.export(saved_head)
+                _log("[OAC] nose mesh patched OK")
+
+                # PLY も同じ補正
+                _gx2 = np.array(_ply['vertex']['x'], copy=True)
+                _gy2 = np.array(_ply['vertex']['y'], copy=True)
+                _gz2 = np.array(_ply['vertex']['z'], copy=True)
+                _all_nose_g = np.where(
+                    (_gx2 >= _nx_min - _nm) & (_gx2 <= _nx_max + _nm) &
+                    (_gy2 >= _ny_min - _nm) & (_gy2 <= _ny_max + _nm) &
+                    (_gz2 >= _nz_min - _nm) & (_gz2 <= _nz_max + _nm)
+                )[0]
+                _nose_cx_g = _gx2[_all_nose_g].mean()
+                _gx2[_all_nose_g] = _nose_cx_g + (_gx2[_all_nose_g] - _nose_cx_g) * 1.08
+                _nose_cz_g = _gz2[_all_nose_g].mean()
+                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.85
+                _nose_lower_g = _all_nose_g[_gy2[_all_nose_g] < _nose_mid_y]
+                _gy2[_nose_lower_g] += 0.002
+                _ply['vertex'].data['x'] = _gx2
+                _ply['vertex'].data['y'] = _gy2
+                _ply['vertex'].data['z'] = _gz2
+                _ply.write(_ply_path)
+                _log(f"[OAC] nose ply patched OK, spatial={len(_all_nose_g)}")
+                # === 鼻補正ここまで ===
+
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
