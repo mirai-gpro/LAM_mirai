@@ -797,14 +797,11 @@ class Generator:
                 _nose_cx = _verts[_all_nose, 0].mean()
                 _verts[_all_nose, 0] = _nose_cx + (_verts[_all_nose, 0] - _nose_cx) * 1.08
 
-                # 2) 鼻高さ Z縮小 (さらに15%抑え: 0.85→0.72)
+                # 2) 鼻高さ Z縮小 (さらに20%抑え: 0.72→0.52)
                 _nose_cz = _verts[_all_nose, 2].mean()
-                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.72
+                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.52
 
-                # 3) 鼻先 下半分を Y方向上にシフト (さらに15%抑え: 0.002→0.0007)
-                _nose_mid_y = (_ny_min + _ny_max) / 2
-                _nose_lower = _all_nose[_verts[_all_nose, 1] < _nose_mid_y]
-                _verts[_nose_lower, 1] += 0.0007
+                # 3) 鼻先シフト: 補正なし (効果不明のため無効化)
                 _log(f"[OAC] nose lower tip shifted: {len(_nose_lower)} verts")
 
                 _mesh.vertices = _verts
@@ -823,9 +820,7 @@ class Generator:
                 _nose_cx_g = _gx2[_all_nose_g].mean()
                 _gx2[_all_nose_g] = _nose_cx_g + (_gx2[_all_nose_g] - _nose_cx_g) * 1.08
                 _nose_cz_g = _gz2[_all_nose_g].mean()
-                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.72
-                _nose_lower_g = _all_nose_g[_gy2[_all_nose_g] < _nose_mid_y]
-                _gy2[_nose_lower_g] += 0.0007
+                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.52
                 _ply['vertex'].data['x'] = _gx2
                 _ply['vertex'].data['y'] = _gy2
                 _ply['vertex'].data['z'] = _gz2
