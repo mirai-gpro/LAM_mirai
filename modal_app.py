@@ -767,7 +767,11 @@ class Generator:
                 shutil.rmtree(oac_dir)
                 print(f"[OAC] ZIP -> {zip_out}")
             except Exception as e:
-                print(f"[OAC] ERROR: {e}")
+                import traceback
+                _err = f"[OAC] ERROR: {e}\n{traceback.format_exc()}"
+                with open("/vol_out/oac_error.txt", "w") as _ef:
+                    _ef.write(_err)
+                output_vol.commit()
                 output_zip_name = None
 
         # --- Video + audio ---
