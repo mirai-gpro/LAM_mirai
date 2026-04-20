@@ -737,7 +737,7 @@ class Generator:
                     _exclude.update(_r[_r < _n_orig].tolist())
                 _cheek_idx = np.array([i for i in _face_idx if i not in _exclude])
                 _cheek_center_y = _verts[_cheek_idx, 1].mean()
-                _verts[_cheek_idx, 1] = _cheek_center_y + (_verts[_cheek_idx, 1] - _cheek_center_y) * 0.9
+                _verts[_cheek_idx, 1] = _cheek_center_y + (_verts[_cheek_idx, 1] - _cheek_center_y) * 0.88
                 print(f"[案4] cheek vertices ({len(_cheek_idx)}): Y scaled 0.9x from center")
 
                 # ③ 人中 (lips の上半分): Y方向上にシフト
@@ -773,7 +773,7 @@ class Generator:
 
                 # ② 頬: Y方向縮小
                 _cheek_center_y_g = _gy[_cheek_idx].mean()
-                _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.9
+                _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.88
 
                 # ③ 人中: Y方向シフト
                 _gy[_upper_lip_idx] += 0.003
