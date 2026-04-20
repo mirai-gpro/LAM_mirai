@@ -704,10 +704,48 @@ class Generator:
                 saved_head = self.lam.renderer.flame_model.save_shaped_mesh(
                     shape_param.unsqueeze(0).cuda(), fd=oac_dir,
                 )
+                _ply_path = os.path.join(oac_dir, "offset.ply")
                 res["cano_gs_lst"][0].save_ply(
-                    os.path.join(oac_dir, "offset.ply"),
-                    rgb2sh=False, offset2xyz=True,
+                    _ply_path, rgb2sh=False, offset2xyz=True,
                 )
+
+                # === 頬 Y方向 0.88 補正 (メッシュ + Gaussian 両方) ===
+                import trimesh as _trimesh
+                from plyfile import PlyData
+
+                # FLAME_masks.pkl から頬領域を特定
+                _masks_path = "/vol/pretrained_models/human_model_files/flame_assets/flame/FLAME_masks.pkl"
+                _part_masks = np.load(_masks_path, allow_pickle=True, encoding="latin1")
+                _n_orig = 5023  # subdivide前の頂点数
+
+                # 頬 = face - nose - lips - eye_region - forehead
+                _face_idx = _part_masks["face"]
+                _face_idx = _face_idx[_face_idx < _n_orig]
+                _exclude = set()
+                for _region in ["nose", "lips", "eye_region", "forehead"]:
+                    _r = _part_masks[_region]
+                    _exclude.update(_r[_r < _n_orig].tolist())
+                _cheek_idx = np.array([i for i in _face_idx if i not in _exclude])
+
+                # メッシュ補正
+                _mesh = _trimesh.load(saved_head)
+                _verts = _mesh.vertices.copy()
+                _cheek_center_y = _verts[_cheek_idx, 1].mean()
+                _verts[_cheek_idx, 1] = _cheek_center_y + (_verts[_cheek_idx, 1] - _cheek_center_y) * 0.88
+                _mesh.vertices = _verts
+                _mesh.export(saved_head)
+                print(f"[CHEEK] mesh: {len(_cheek_idx)} vertices, Y *= 0.88", flush=True)
+
+                # Gaussian (PLY) 補正
+                _ply = PlyData.read(_ply_path)
+                _gy = _ply['vertex']['y'].copy()
+                _cheek_center_y_g = _gy[_cheek_idx].mean()
+                _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.88
+                _ply['vertex']['y'] = _gy
+                _ply.write(_ply_path)
+                print(f"[CHEEK] ply: {len(_cheek_idx)} points, Y *= 0.88", flush=True)
+                # === 頬補正ここまで ===
+
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
