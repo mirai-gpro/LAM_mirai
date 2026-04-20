@@ -643,6 +643,23 @@ class Generator:
         )
 
         motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
+
+        # === A案: FLAME パラメータ スケーリング ===
+        # 目的: 入力画像の印象を保持し、モーション由来の顔変形を抑制
+        # 値を変えて ZIP 比較。1.0 = 変更なし、0.0 = 完全抑制
+        PARAM_SCALES = {
+            "eyes_pose": 0.3,   # 目の動き抑制 → モーション毎の目の印象差を軽減
+            "jaw_pose": 0.7,    # 顎開閉抑制 → 下顔面の間延び軽減
+            "expr": 0.6,        # 表情全体抑制 → 欧米人/中国人化を軽減
+            "neck_pose": 0.8,   # 首の動き微抑制
+        }
+        fp = motion_seq["flame_params"]
+        for key, scale in PARAM_SCALES.items():
+            if key in fp:
+                fp[key] = fp[key] * scale
+                print(f"[A案] {key} *= {scale}")
+        # === A案ここまで ===
+
         device, dtype = "cuda", torch.float32
 
         print("[INFER] start…")
