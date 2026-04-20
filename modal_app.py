@@ -797,14 +797,14 @@ class Generator:
                 _nose_cx = _verts[_all_nose, 0].mean()
                 _verts[_all_nose, 0] = _nose_cx + (_verts[_all_nose, 0] - _nose_cx) * 1.08
 
-                # 2) 鼻高さ Z縮小 (最前面から後退 15%)
+                # 2) 鼻高さ Z縮小 (さらに15%抑え: 0.85→0.72)
                 _nose_cz = _verts[_all_nose, 2].mean()
-                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.85
+                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.72
 
-                # 3) 鼻先 下半分を Y方向上にシフト (鼻先の下向き尖りを修正)
+                # 3) 鼻先 下半分を Y方向上にシフト (さらに15%抑え: 0.002→0.0007)
                 _nose_mid_y = (_ny_min + _ny_max) / 2
                 _nose_lower = _all_nose[_verts[_all_nose, 1] < _nose_mid_y]
-                _verts[_nose_lower, 1] += 0.002
+                _verts[_nose_lower, 1] += 0.0007
                 _log(f"[OAC] nose lower tip shifted: {len(_nose_lower)} verts")
 
                 _mesh.vertices = _verts
@@ -823,15 +823,80 @@ class Generator:
                 _nose_cx_g = _gx2[_all_nose_g].mean()
                 _gx2[_all_nose_g] = _nose_cx_g + (_gx2[_all_nose_g] - _nose_cx_g) * 1.08
                 _nose_cz_g = _gz2[_all_nose_g].mean()
-                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.85
+                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.72
                 _nose_lower_g = _all_nose_g[_gy2[_all_nose_g] < _nose_mid_y]
-                _gy2[_nose_lower_g] += 0.002
+                _gy2[_nose_lower_g] += 0.0007
                 _ply['vertex'].data['x'] = _gx2
                 _ply['vertex'].data['y'] = _gy2
                 _ply['vertex'].data['z'] = _gz2
                 _ply.write(_ply_path)
                 _log(f"[OAC] nose ply patched OK, spatial={len(_all_nose_g)}")
                 # === 鼻補正ここまで ===
+
+                # === 顎補正: 顎の頂点を Y方向上にシフト (15%抑制) ===
+                # boundary領域の下半分 = 顎ライン
+                _bound_idx = np.asarray(_part_masks["boundary"])
+                _bound_idx = _bound_idx[_bound_idx < _n_orig]
+                _bound_ref = _verts[_bound_idx]
+                _bx_min, _bx_max = _bound_ref[:, 0].min(), _bound_ref[:, 0].max()
+                _by_min, _by_max = _bound_ref[:, 1].min(), _bound_ref[:, 1].max()
+                _bz_min, _bz_max = _bound_ref[:, 2].min(), _bound_ref[:, 2].max()
+                _all_bound = np.where(
+                    (_verts[:, 0] >= _bx_min - _margin) & (_verts[:, 0] <= _bx_max + _margin) &
+                    (_verts[:, 1] >= _by_min - _margin) & (_verts[:, 1] <= _by_max + _margin) &
+                    (_verts[:, 2] >= _bz_min - _margin) & (_verts[:, 2] <= _bz_max + _margin)
+                )[0]
+                # 下半分のみ (顎)
+                _jaw_mid_y = (_by_min + _by_max) / 2
+                _jaw_verts = _all_bound[_verts[_all_bound, 1] < _jaw_mid_y]
+                _jaw_center_y = _verts[_jaw_verts, 1].mean()
+                _verts[_jaw_verts, 1] = _jaw_center_y + (_verts[_jaw_verts, 1] - _jaw_center_y) * 0.85
+                _mesh.vertices = _verts
+                _mesh.export(saved_head)
+                _log(f"[OAC] jaw: {len(_jaw_verts)} verts, Y *= 0.85")
+                # PLY顎
+                _jaw_g = np.where(
+                    (_gx2 >= _bx_min - _margin) & (_gx2 <= _bx_max + _margin) &
+                    (_gy2 >= _by_min - _margin) & (_gy2 <= _by_max + _margin) &
+                    (_gz2 >= _bz_min - _margin) & (_gz2 <= _bz_max + _margin)
+                )[0]
+                _jaw_g_lower = _jaw_g[_gy2[_jaw_g] < _jaw_mid_y]
+                _jaw_cy_g = _gy2[_jaw_g_lower].mean()
+                _gy2[_jaw_g_lower] = _jaw_cy_g + (_gy2[_jaw_g_lower] - _jaw_cy_g) * 0.85
+                _ply['vertex'].data['y'] = _gy2
+                _ply.write(_ply_path)
+                _log(f"[OAC] jaw ply: {len(_jaw_g_lower)} verts")
+                # === 顎補正ここまで ===
+
+                # === 目補正: 目尻を X方向10%内側に縮小 ===
+                _eye_idx = np.asarray(_part_masks["eye_region"])
+                _eye_idx = _eye_idx[_eye_idx < _n_orig]
+                _eye_ref = _verts[_eye_idx]
+                _ex_min, _ex_max = _eye_ref[:, 0].min(), _eye_ref[:, 0].max()
+                _ey_min, _ey_max = _eye_ref[:, 1].min(), _eye_ref[:, 1].max()
+                _ez_min, _ez_max = _eye_ref[:, 2].min(), _eye_ref[:, 2].max()
+                _all_eye = np.where(
+                    (_verts[:, 0] >= _ex_min - _margin) & (_verts[:, 0] <= _ex_max + _margin) &
+                    (_verts[:, 1] >= _ey_min - _margin) & (_verts[:, 1] <= _ey_max + _margin) &
+                    (_verts[:, 2] >= _ez_min - _margin) & (_verts[:, 2] <= _ez_max + _margin)
+                )[0]
+                _eye_cx = _verts[_all_eye, 0].mean()
+                _verts[_all_eye, 0] = _eye_cx + (_verts[_all_eye, 0] - _eye_cx) * 0.90
+                _mesh.vertices = _verts
+                _mesh.export(saved_head)
+                _log(f"[OAC] eye: {len(_all_eye)} verts, X *= 0.90")
+                # PLY目
+                _all_eye_g = np.where(
+                    (_gx2 >= _ex_min - _margin) & (_gx2 <= _ex_max + _margin) &
+                    (_gy2 >= _ey_min - _margin) & (_gy2 <= _ey_max + _margin) &
+                    (_gz2 >= _ez_min - _margin) & (_gz2 <= _ez_max + _margin)
+                )[0]
+                _eye_cx_g = _gx2[_all_eye_g].mean()
+                _gx2[_all_eye_g] = _eye_cx_g + (_gx2[_all_eye_g] - _eye_cx_g) * 0.90
+                _ply['vertex'].data['x'] = _gx2
+                _ply.write(_ply_path)
+                _log(f"[OAC] eye ply: {len(_all_eye_g)} verts")
+                # === 目補正ここまで ===
 
                 generate_glb(
                     input_mesh=Path(saved_head),
