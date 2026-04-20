@@ -563,6 +563,7 @@ class Generator:
     @modal.method()
     def generate(self, image_bytes: bytes, motion_name: str, enable_oac_file: bool):
         """Run LAM inference. Mirrors app.py core_fn() (lines 311-471)."""
+        print(f"[DEBUG] enable_oac_file={enable_oac_file}", flush=True)
         from datetime import datetime
         from pathlib import Path
 
@@ -693,7 +694,9 @@ class Generator:
 
         # --- OAC ZIP (optional) ---
         output_zip_name = None
+        print(f"[DEBUG] entering OAC block: enable_oac_file={enable_oac_file}", flush=True)
         if enable_oac_file:
+            print("[DEBUG] OAC block entered", flush=True)
             try:
                 sys.path.insert(0, "/app")
                 from generateARKITGLBWithBlender import generate_glb
