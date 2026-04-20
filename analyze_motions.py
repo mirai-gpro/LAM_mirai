@@ -1,92 +1,121 @@
-"""Analyze motion parameters for all 12 motions in the Volume."""
+"""Read actual numerical values from flame_param .npz files for all 12 motions."""
 import modal
 import os
-import json
 
-app = modal.App("lam-motion-analysis-v3")
+app = modal.App("lam-motion-values")
 volume = modal.Volume.from_name("lam-data", create_if_missing=False)
+image = modal.Image.debian_slim(python_version="3.10").pip_install("numpy==1.23.0")
 
-@app.function(volumes={"/vol": volume}, timeout=120)
-def analyze():
+@app.function(volumes={"/vol": volume}, timeout=300, image=image)
+def dump_values():
+    import numpy as np
+
     base = "/vol/assets/sample_motion/export"
     motions = sorted([d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))])
 
-    results = []
+    # First: determine keys from first file
+    first_dir = os.path.join(base, motions[0], "flame_param")
+    first_file = sorted(os.listdir(first_dir))[0]
+    sample = np.load(os.path.join(first_dir, first_file))
+    keys = list(sample.keys())
+    print(f"NPZ keys: {keys}")
+    for k in keys:
+        print(f"  {k}: shape={sample[k].shape}, dtype={sample[k].dtype}")
+    print()
+
+    # For each motion: load ALL frames, compute stats per parameter
+    print("=" * 120)
+    print(f"{'Motion':<30} | {'expression (10D)':<55} | {'rotation (3D)':<35} | {'translation (3D)':<35}")
+    print(f"{'':30} | {'min':>8} {'max':>8} {'mean':>8} {'std':>8} {'dims':>5} | {'min':>8} {'max':>8} {'mean':>8} | {'min':>8} {'max':>8} {'mean':>8}")
+    print("-" * 120)
+
     for m in motions:
         fp_dir = os.path.join(base, m, "flame_param")
-        if not os.path.isdir(fp_dir):
-            results.append((m, 0, "?", "?", "?", "?"))
-            continue
-
         files = sorted(os.listdir(fp_dir))
-        frames = len(files)
 
-        # Read first frame file to get structure
-        if frames > 0:
-            first_file = os.path.join(fp_dir, files[0])
-            ext = os.path.splitext(files[0])[1]
+        exprs, rots, trans = [], [], []
+        for f in files:
+            d = np.load(os.path.join(fp_dir, f))
+            # Try common key names
+            for ek in ["expression", "expr"]:
+                if ek in d:
+                    exprs.append(d[ek].flatten())
+                    break
+            for rk in ["rotation", "pose"]:
+                if rk in d:
+                    rots.append(d[rk].flatten())
+                    break
+            for tk in ["translation"]:
+                if tk in d:
+                    trans.append(d[tk].flatten())
+                    break
 
-            if ext == '.json':
-                with open(first_file) as f:
-                    d = json.load(f)
-                keys = list(d.keys())
-                dims = {k: len(d[k]) if isinstance(d[k], list) else str(type(d[k]).__name__) for k in keys}
-            elif ext == '.npz':
-                # npz needs numpy, skip detail
-                dims = {"format": "npz"}
-                keys = ["npz"]
-            else:
-                # Try reading as json anyway
-                try:
-                    with open(first_file) as f:
-                        d = json.load(f)
-                    keys = list(d.keys())
-                    dims = {k: len(d[k]) if isinstance(d[k], list) else str(type(d[k]).__name__) for k in keys}
-                except:
-                    dims = {"format": ext}
-                    keys = [ext]
+        if exprs:
+            ea = np.array(exprs)
+            expr_str = f"{ea.min():>8.3f} {ea.max():>8.3f} {ea.mean():>8.3f} {ea.std():>8.3f} {ea.shape[1]:>5}"
+        else:
+            expr_str = "N/A"
 
-            # Get wav/mp4 sizes
-            wav = os.path.join(base, m, m + ".wav")
-            mp4 = os.path.join(base, m, m + ".mp4")
-            wav_mb = f"{os.path.getsize(wav)/1024/1024:.1f}" if os.path.isfile(wav) else "-"
-            mp4_mb = f"{os.path.getsize(mp4)/1024/1024:.1f}" if os.path.isfile(mp4) else "-"
+        if rots:
+            ra = np.array(rots)
+            rot_str = f"{ra.min():>8.3f} {ra.max():>8.3f} {ra.mean():>8.3f}"
+        else:
+            rot_str = "N/A"
 
-            results.append((m, frames, ext, dims, wav_mb, mp4_mb))
+        if trans:
+            ta = np.array(trans)
+            trans_str = f"{ta.min():>8.4f} {ta.max():>8.4f} {ta.mean():>8.4f}"
+        else:
+            trans_str = "N/A"
 
-    # Print table
-    print(f"\n{'#':<4} {'Motion':<32} {'Frames':>7} {'Ext':>5} {'WAV MB':>7} {'MP4 MB':>7}")
-    print("=" * 65)
-    for i, (m, frames, ext, dims, wav_mb, mp4_mb) in enumerate(results, 1):
-        print(f"{i:<4} {m:<32} {frames:>7} {ext:>5} {wav_mb:>7} {mp4_mb:>7}")
+        print(f"{m:<30} | {expr_str} | {rot_str} | {trans_str}")
 
-    # Print parameter structure (from first motion's first frame)
-    print(f"\n--- Parameter structure (per frame) ---")
-    if results:
-        m, frames, ext, dims, _, _ = results[0]
-        print(f"Source: {m}/flame_param/{ext} files")
-        for k, v in dims.items():
-            print(f"  {k:<25} dim={v}")
+    # Detailed per-dimension breakdown for expression (first motion as example)
+    print(f"\n{'=' * 100}")
+    print(f"Expression 10D per-dimension breakdown (all motions)")
+    print(f"{'=' * 100}")
+    print(f"{'Motion':<25} | {'dim0':>6} {'dim1':>6} {'dim2':>6} {'dim3':>6} {'dim4':>6} {'dim5':>6} {'dim6':>6} {'dim7':>6} {'dim8':>6} {'dim9':>6}")
+    print("-" * 100)
 
-        # Also show a few keys from first frame
-        fp_dir = os.path.join(base, results[0][0], "flame_param")
+    for m in motions:
+        fp_dir = os.path.join(base, m, "flame_param")
         files = sorted(os.listdir(fp_dir))
-        first = os.path.join(fp_dir, files[0])
-        try:
-            with open(first) as f:
-                d = json.load(f)
-            print(f"\n--- First frame keys & shapes ---")
-            for k, v in d.items():
-                if isinstance(v, list):
-                    if v and isinstance(v[0], list):
-                        print(f"  {k:<25} [{len(v)} x {len(v[0])}]")
-                    else:
-                        print(f"  {k:<25} [{len(v)}]")
-                else:
-                    print(f"  {k:<25} {type(v).__name__}: {v}")
-        except:
-            pass
+        exprs = []
+        for f in files:
+            d = np.load(os.path.join(fp_dir, f))
+            for ek in ["expression", "expr"]:
+                if ek in d:
+                    exprs.append(d[ek].flatten())
+                    break
+        if exprs:
+            ea = np.array(exprs)
+            dims = min(ea.shape[1], 10)
+            means = ea.mean(axis=0)[:dims]
+            vals = " ".join(f"{v:>6.3f}" for v in means)
+            print(f"{m:<25} | {vals}")
+
+    # Rotation per-dimension
+    print(f"\n{'=' * 60}")
+    print(f"Rotation 3D per-dimension mean (all motions)")
+    print(f"{'=' * 60}")
+    print(f"{'Motion':<25} | {'yaw':>8} {'pitch':>8} {'roll':>8}")
+    print("-" * 60)
+
+    for m in motions:
+        fp_dir = os.path.join(base, m, "flame_param")
+        files = sorted(os.listdir(fp_dir))
+        rots = []
+        for f in files:
+            d = np.load(os.path.join(fp_dir, f))
+            for rk in ["rotation", "pose"]:
+                if rk in d:
+                    rots.append(d[rk].flatten())
+                    break
+        if rots:
+            ra = np.array(rots)
+            means = ra.mean(axis=0)[:3]
+            print(f"{m:<25} | {means[0]:>8.4f} {means[1]:>8.4f} {means[2]:>8.4f}")
 
 @app.local_entrypoint()
 def main():
-    analyze.remote()
+    dump_values.remote()
