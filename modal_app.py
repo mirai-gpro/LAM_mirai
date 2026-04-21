@@ -816,6 +816,106 @@ class Generator:
                             _ef.write(_err)
                         output_vol.commit()
                         raise
+
+                # Jaw correction: boundary マスクの下半分 (顎ライン) を Y 縮小
+                _corr_jaw = corrections["jaw"]
+                if _corr_jaw["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] jaw correction start: y_scale={_corr_jaw['y_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+                        _n_orig = 5023
+                        _bidx = np.asarray(_part_masks["boundary"])
+                        _bidx = _bidx[_bidx < _n_orig]
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        _bref = _verts[_bidx]
+                        _bxmin, _bxmax = _bref[:, 0].min(), _bref[:, 0].max()
+                        _bymin, _bymax = _bref[:, 1].min(), _bref[:, 1].max()
+                        _bzmin, _bzmax = _bref[:, 2].min(), _bref[:, 2].max()
+                        _bm = _corr_jaw["margin"]
+                        _ball = np.where(
+                            (_verts[:, 0] >= _bxmin - _bm) & (_verts[:, 0] <= _bxmax + _bm) &
+                            (_verts[:, 1] >= _bymin - _bm) & (_verts[:, 1] <= _bymax + _bm) &
+                            (_verts[:, 2] >= _bzmin - _bm) & (_verts[:, 2] <= _bzmax + _bm)
+                        )[0]
+                        # 顎 = boundary の下半分 (Y が中央値より小さい側)
+                        _by_mid = (_bymin + _bymax) / 2
+                        _jaw_sel = _ball[_verts[_ball, 1] < _by_mid]
+                        if len(_jaw_sel) > 0:
+                            _jy = _verts[_jaw_sel, 1].mean()
+                            _verts[_jaw_sel, 1] = _jy + (
+                                _verts[_jaw_sel, 1] - _jy
+                            ) * _corr_jaw["y_scale"]
+                            _mesh.vertices = _verts
+                            _mesh.export(saved_head)
+                        _log(f"[OAC] jaw: boundary={len(_bidx)} "
+                             f"lower_half={len(_jaw_sel)}/{len(_verts)} OK")
+                    except Exception as _je:
+                        import traceback
+                        _err = f"[OAC] jaw ERROR: {_je}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
+
+                # Eye correction: eye_region マスクを X 縮小 (目尻を狭める)
+                _corr_eye = corrections["eye"]
+                if _corr_eye["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] eye correction start: x_scale={_corr_eye['x_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+                        _n_orig = 5023
+                        _eidx = np.asarray(_part_masks["eye_region"])
+                        _eidx = _eidx[_eidx < _n_orig]
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        _eref = _verts[_eidx]
+                        _exmin, _exmax = _eref[:, 0].min(), _eref[:, 0].max()
+                        _eymin, _eymax = _eref[:, 1].min(), _eref[:, 1].max()
+                        _ezmin, _ezmax = _eref[:, 2].min(), _eref[:, 2].max()
+                        _em = _corr_eye["margin"]
+                        _esel = np.where(
+                            (_verts[:, 0] >= _exmin - _em) & (_verts[:, 0] <= _exmax + _em) &
+                            (_verts[:, 1] >= _eymin - _em) & (_verts[:, 1] <= _eymax + _em) &
+                            (_verts[:, 2] >= _ezmin - _em) & (_verts[:, 2] <= _ezmax + _em)
+                        )[0]
+                        # 左右対称に縮小するため中心を 0 固定 (顔の対称軸)
+                        _verts[_esel, 0] = _verts[_esel, 0] * _corr_eye["x_scale"]
+                        _mesh.vertices = _verts
+                        _mesh.export(saved_head)
+                        _log(f"[OAC] eye: orig={len(_eidx)} "
+                             f"spatial={len(_esel)}/{len(_verts)} OK")
+                    except Exception as _ee:
+                        import traceback
+                        _err = f"[OAC] eye ERROR: {_ee}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
                 # === Vertex corrections end ===
 
                 generate_glb(
@@ -886,7 +986,9 @@ def web():
 
     def predict(image_file, motion_name, enable_oac,
                 cheek_on, cheek_y,
-                nose_on, nose_x, nose_z):
+                nose_on, nose_x, nose_z,
+                jaw_on, jaw_y,
+                eye_on, eye_x):
         if image_file is None:
             raise gr.Error("Please upload an image first.")
         with open(image_file, "rb") as f:
@@ -895,6 +997,8 @@ def web():
         corrections = {
             "cheek": {"enabled": cheek_on, "y_scale": cheek_y, "margin": 0.002},
             "nose":  {"enabled": nose_on,  "x_scale": nose_x, "z_scale": nose_z, "margin": 0.001},
+            "jaw":   {"enabled": jaw_on,   "y_scale": jaw_y, "margin": 0.002},
+            "eye":   {"enabled": eye_on,   "x_scale": eye_x, "margin": 0.002},
         }
         video_name, zip_name = Generator().generate.remote(
             img_bytes, motion_name, enable_oac, corrections
@@ -949,6 +1053,24 @@ def web():
                         minimum=0.30, maximum=1.20, value=1.00, step=0.01,
                         label="Nose Z-scale (高さ)",
                     )
+                    gr.Markdown(
+                        "**顎 (Jaw)** — boundary マスク下半分の Y スケール。"
+                        " 突き出した顎を <1.00 で抑制。"
+                    )
+                    jaw_on = gr.Checkbox(label="顎補正を有効化", value=False)
+                    jaw_y = gr.Slider(
+                        minimum=0.70, maximum=1.20, value=1.00, step=0.01,
+                        label="Jaw Y-scale",
+                    )
+                    gr.Markdown(
+                        "**目 (Eye)** — eye_region の X スケール。"
+                        " <1.00 で目尻が狭まり切れ長効果を抑える。"
+                    )
+                    eye_on = gr.Checkbox(label="目補正を有効化", value=False)
+                    eye_x = gr.Slider(
+                        minimum=0.70, maximum=1.10, value=1.00, step=0.01,
+                        label="Eye X-scale",
+                    )
                 btn = gr.Button("Generate", variant="primary")
             with gr.Column(scale=1):
                 out_video = gr.Video(label="Rendered Video", autoplay=True)
@@ -958,7 +1080,9 @@ def web():
             predict,
             inputs=[input_img, motion_choice, enable_oac,
                     cheek_on, cheek_y,
-                    nose_on, nose_x, nose_z],
+                    nose_on, nose_x, nose_z,
+                    jaw_on, jaw_y,
+                    eye_on, eye_x],
             outputs=[out_video, out_zip],
         )
 
