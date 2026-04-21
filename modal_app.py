@@ -45,6 +45,16 @@ app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=False)
 output_vol = modal.Volume.from_name(OUTPUT_VOLUME_NAME, create_if_missing=True)
 
+# ==================== OAC Vertex Correction Defaults ====================
+# 全部位 disabled = 素の LAM 出力 (FLAME 欧米人バイアスのまま)
+# UI/CLI から corrections dict を渡すことで各部位を有効化できる。
+DEFAULT_CORRECTIONS = {
+    "cheek": {"enabled": False, "y_scale": 1.0,  "margin": 0.002},
+    "nose":  {"enabled": False, "x_scale": 1.0,  "z_scale": 1.0, "margin": 0.001},
+    "jaw":   {"enabled": False, "y_scale": 1.0,  "margin": 0.002},
+    "eye":   {"enabled": False, "x_scale": 1.0,  "margin": 0.002},
+}
+
 # ==================== Image Definition ====================
 
 image = (
@@ -561,8 +571,22 @@ class Generator:
         print("=" * 70)
 
     @modal.method()
-    def generate(self, image_bytes: bytes, motion_name: str, enable_oac_file: bool):
-        """Run LAM inference. Mirrors app.py core_fn() (lines 311-471)."""
+    def generate(self, image_bytes: bytes, motion_name: str,
+                 enable_oac_file: bool, corrections: dict = None):
+        """Run LAM inference. Mirrors app.py core_fn() (lines 311-471).
+
+        Args:
+            corrections: OAC 頂点補正設定。None なら DEFAULT_CORRECTIONS (全 disabled)。
+                各部位の dict が `enabled=False` なら補正スキップ。
+        """
+        # Scaffolding: コピーしたうえで欠損キーを DEFAULT で埋める。
+        # 適用ロジックは後続コミットで OAC ブロックに追加する。
+        _corr = {k: dict(v) for k, v in DEFAULT_CORRECTIONS.items()}
+        if corrections:
+            for k, v in corrections.items():
+                if k in _corr and isinstance(v, dict):
+                    _corr[k].update(v)
+        corrections = _corr
         from datetime import datetime
         from pathlib import Path
 
