@@ -695,10 +695,73 @@ class Generator:
                 saved_head = self.lam.renderer.flame_model.save_shaped_mesh(
                     shape_param.unsqueeze(0).cuda(), fd=oac_dir,
                 )
+                _ply_path = os.path.join(oac_dir, "offset.ply")
                 res["cano_gs_lst"][0].save_ply(
-                    os.path.join(oac_dir, "offset.ply"),
-                    rgb2sh=False, offset2xyz=True,
+                    _ply_path, rgb2sh=False, offset2xyz=True,
                 )
+
+                # === Vertex corrections (UI-configurable) ===
+                # corrections["cheek"]["enabled"] が True のときのみ頬を補正。
+                # mesh (skin.glb) のみ補正 (PLY xyz は offset2xyz でオフセット保存
+                # のため bbox 選択が成立せず、視覚効果に寄与しないので触らない)。
+                _corr_cheek = corrections["cheek"]
+                if _corr_cheek["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] cheek correction start: y_scale={_corr_cheek['y_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+
+                        _n_orig = 5023
+                        _face_idx = np.asarray(_part_masks["face"])
+                        _face_idx = _face_idx[_face_idx < _n_orig]
+                        _exclude = set()
+                        for _r_name in ["nose", "lips", "eye_region", "forehead"]:
+                            _r = np.asarray(_part_masks[_r_name])
+                            _exclude.update(_r[_r < _n_orig].tolist())
+                        _cheek_idx_orig = np.array(
+                            [i for i in _face_idx if i not in _exclude],
+                            dtype=np.int64,
+                        )
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        # Spatial bbox expansion to include subdivided verts
+                        _cheek_ref = _verts[_cheek_idx_orig]
+                        _ymin, _ymax = _cheek_ref[:, 1].min(), _cheek_ref[:, 1].max()
+                        _xmin, _xmax = _cheek_ref[:, 0].min(), _cheek_ref[:, 0].max()
+                        _zmin, _zmax = _cheek_ref[:, 2].min(), _cheek_ref[:, 2].max()
+                        _m = _corr_cheek["margin"]
+                        _sel = np.where(
+                            (_verts[:, 0] >= _xmin - _m) & (_verts[:, 0] <= _xmax + _m) &
+                            (_verts[:, 1] >= _ymin - _m) & (_verts[:, 1] <= _ymax + _m) &
+                            (_verts[:, 2] >= _zmin - _m) & (_verts[:, 2] <= _zmax + _m)
+                        )[0]
+
+                        _cy = _verts[_sel, 1].mean()
+                        _verts[_sel, 1] = _cy + (_verts[_sel, 1] - _cy) * _corr_cheek["y_scale"]
+                        _mesh.vertices = _verts
+                        _mesh.export(saved_head)
+                        _log(f"[OAC] cheek: orig={len(_cheek_idx_orig)} "
+                             f"spatial={len(_sel)}/{len(_verts)} OK")
+                    except Exception as _ce:
+                        import traceback
+                        _err = f"[OAC] cheek ERROR: {_ce}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
+                # === Vertex corrections end ===
+
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
@@ -765,14 +828,18 @@ def web():
         "The_Shawshank_Redemption",
     ]
 
-    def predict(image_file, motion_name, enable_oac):
+    def predict(image_file, motion_name, enable_oac,
+                cheek_on, cheek_y):
         if image_file is None:
             raise gr.Error("Please upload an image first.")
         with open(image_file, "rb") as f:
             img_bytes = f.read()
 
+        corrections = {
+            "cheek": {"enabled": cheek_on, "y_scale": cheek_y, "margin": 0.002},
+        }
         video_name, zip_name = Generator().generate.remote(
-            img_bytes, motion_name, enable_oac
+            img_bytes, motion_name, enable_oac, corrections
         )
 
         output_vol.reload()
@@ -801,6 +868,16 @@ def web():
                 enable_oac = gr.Checkbox(
                     label="Export ZIP for Chatting Avatar (OAC)", value=False,
                 )
+                with gr.Accordion("🛠 OAC 頂点補正パラメータ", open=False):
+                    gr.Markdown(
+                        "**頬 (Cheek)** — FLAME 欧米人バイアスで縦長化した頬を Y 方向縮小。"
+                        " 1.00 = 補正なし、<1.00 で縮小、>1.00 で拡大。"
+                    )
+                    cheek_on = gr.Checkbox(label="頬補正を有効化", value=False)
+                    cheek_y = gr.Slider(
+                        minimum=0.70, maximum=1.30, value=1.00, step=0.01,
+                        label="Cheek Y-scale",
+                    )
                 btn = gr.Button("Generate", variant="primary")
             with gr.Column(scale=1):
                 out_video = gr.Video(label="Rendered Video", autoplay=True)
@@ -808,7 +885,8 @@ def web():
 
         btn.click(
             predict,
-            inputs=[input_img, motion_choice, enable_oac],
+            inputs=[input_img, motion_choice, enable_oac,
+                    cheek_on, cheek_y],
             outputs=[out_video, out_zip],
         )
 
