@@ -624,22 +624,6 @@ class Generator:
             get_shape_param=True,
         )
 
-        # === 案1: shape_param PCA 次元補正 ===
-        # FLAME shape basis は欧米人データで学習されており、日本人顔を表現すると
-        # 鼻が高く・頬が縦長・人中が長い・額が縮小する方向に歪む。上位PCA成分を補正。
-        SHAPE_CORRECTIONS = {
-            0: 0.8,    # 顔全体のスケール (額〜頭頂の縮小を抑制)
-            1: 0.7,    # 顔の縦横比 (縦長化を抑制)
-            2: 0.5,    # 鼻の突出度 (高すぎる鼻を抑制)
-            3: 0.7,    # 顔幅/頬骨 (頬面積の変形を抑制)
-            4: 0.8,    # 額〜眉上の高さ (頭頂部縮小を抑制)
-        }
-        print(f"[案1] shape_param before: dims 0-4 = {shape_param[:5].tolist()}")
-        for dim, scale in SHAPE_CORRECTIONS.items():
-            shape_param[dim] = shape_param[dim] * scale
-        print(f"[案1] shape_param after:  dims 0-4 = {shape_param[:5].tolist()}")
-        # === 案1ここまで ===
-
         vis_ref_img = (
             image_tensor[0].permute(1, 2, 0).cpu().detach().numpy() * 255
         ).astype(np.uint8)
@@ -659,23 +643,6 @@ class Generator:
         )
 
         motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
-
-        # === A案: FLAME パラメータ スケーリング ===
-        # 目的: 入力画像の印象を保持し、モーション由来の顔変形を抑制
-        # 値を変えて ZIP 比較。1.0 = 変更なし、0.0 = 完全抑制
-        PARAM_SCALES = {
-            "eyes_pose": 0.3,   # 目の動き抑制 → モーション毎の目の印象差を軽減
-            "jaw_pose": 0.7,    # 顎開閉抑制 → 下顔面の間延び軽減
-            "expr": 0.6,        # 表情全体抑制 → 欧米人/中国人化を軽減
-            "neck_pose": 0.8,   # 首の動き微抑制
-        }
-        fp = motion_seq["flame_params"]
-        for key, scale in PARAM_SCALES.items():
-            if key in fp:
-                fp[key] = fp[key] * scale
-                print(f"[A案] {key} *= {scale}")
-        # === A案ここまで ===
-
         device, dtype = "cuda", torch.float32
 
         print("[INFER] start…")
@@ -704,126 +671,10 @@ class Generator:
                 saved_head = self.lam.renderer.flame_model.save_shaped_mesh(
                     shape_param.unsqueeze(0).cuda(), fd=oac_dir,
                 )
-                _ply_path = os.path.join(oac_dir, "offset.ply")
                 res["cano_gs_lst"][0].save_ply(
-                    _ply_path, rgb2sh=False, offset2xyz=True,
+                    os.path.join(oac_dir, "offset.ply"),
+                    rgb2sh=False, offset2xyz=True,
                 )
-
-                # === 頬 Y方向 0.88 補正 (メッシュ + Gaussian 両方) ===
-                import pickle
-                import trimesh as _trimesh
-                from plyfile import PlyData
-
-                _log = lambda msg: open("/vol_out/oac_debug.txt", "a").write(msg + "\n")
-                _log("[OAC] start cheek correction")
-
-                # FLAME_masks.pkl を pickle.load で読む
-                _masks_path = "/vol/pretrained_models/human_model_files/flame_assets/flame/FLAME_masks.pkl"
-                with open(_masks_path, "rb") as _mf:
-                    _part_masks = pickle.load(_mf, encoding="latin1")
-
-                # 元の5023頂点から頬インデックスを取得
-                _n_orig = 5023
-                _face_idx = np.asarray(_part_masks["face"])
-                _face_idx = _face_idx[_face_idx < _n_orig]
-                _exclude = set()
-                for _region in ["nose", "lips", "eye_region", "forehead"]:
-                    _r = np.asarray(_part_masks[_region])
-                    _exclude.update(_r[_r < _n_orig].tolist())
-                _cheek_idx_orig = np.array([i for i in _face_idx if i not in _exclude], dtype=np.int64)
-
-                # メッシュ読み込み
-                _mesh = _trimesh.load_mesh(saved_head, process=False)
-                _verts = _mesh.vertices.copy()
-
-                # 空間座標ベースで全20018頂点から頬領域を選択
-                # 元の430頂点の座標範囲を基準に、subdivide後の頂点も含めて選択
-                _cheek_ref = _verts[_cheek_idx_orig]
-                _x_min, _x_max = _cheek_ref[:, 0].min(), _cheek_ref[:, 0].max()
-                _y_min, _y_max = _cheek_ref[:, 1].min(), _cheek_ref[:, 1].max()
-                _z_min, _z_max = _cheek_ref[:, 2].min(), _cheek_ref[:, 2].max()
-                # 少しマージンを持たせる
-                _margin = 0.002
-                _all_cheek = np.where(
-                    (_verts[:, 0] >= _x_min - _margin) & (_verts[:, 0] <= _x_max + _margin) &
-                    (_verts[:, 1] >= _y_min - _margin) & (_verts[:, 1] <= _y_max + _margin) &
-                    (_verts[:, 2] >= _z_min - _margin) & (_verts[:, 2] <= _z_max + _margin)
-                )[0]
-                _log(f"[OAC] orig cheek={len(_cheek_idx_orig)}, spatial cheek={len(_all_cheek)}/{len(_verts)}")
-
-                # メッシュ補正
-                _cheek_center_y = _verts[_all_cheek, 1].mean()
-                _verts[_all_cheek, 1] = _cheek_center_y + (_verts[_all_cheek, 1] - _cheek_center_y) * 0.88
-                _mesh.vertices = _verts
-                _mesh.export(saved_head)
-                _log("[OAC] mesh patched OK")
-
-                # Gaussian (PLY) 補正
-                _ply = PlyData.read(_ply_path, mmap=False)
-                _gy = np.array(_ply['vertex']['y'], copy=True)
-                _gx = np.array(_ply['vertex']['x'], copy=True)
-                _gz = np.array(_ply['vertex']['z'], copy=True)
-                _all_cheek_g = np.where(
-                    (_gx >= _x_min - _margin) & (_gx <= _x_max + _margin) &
-                    (_gy >= _y_min - _margin) & (_gy <= _y_max + _margin) &
-                    (_gz >= _z_min - _margin) & (_gz <= _z_max + _margin)
-                )[0]
-                _cheek_center_y_g = _gy[_all_cheek_g].mean()
-                _gy[_all_cheek_g] = _cheek_center_y_g + (_gy[_all_cheek_g] - _cheek_center_y_g) * 0.88
-                _ply['vertex'].data['y'] = _gy
-                _ply.write(_ply_path)
-                _log(f"[OAC] ply spatial cheek={len(_all_cheek_g)}, patched OK")
-                # === 頬補正ここまで ===
-
-                # === 鼻補正 (メッシュ + Gaussian 両方) ===
-                # 1) 鼻幅: X方向拡大 (小鼻を広げる)
-                # 2) 鼻高さ: Z方向縮小 (突出を抑える)
-                _nose_idx_orig = np.asarray(_part_masks["nose"])
-                _nose_idx_orig = _nose_idx_orig[_nose_idx_orig < _n_orig]
-                _nose_ref = _verts[_nose_idx_orig]
-                _nx_min, _nx_max = _nose_ref[:, 0].min(), _nose_ref[:, 0].max()
-                _ny_min, _ny_max = _nose_ref[:, 1].min(), _nose_ref[:, 1].max()
-                _nz_min, _nz_max = _nose_ref[:, 2].min(), _nose_ref[:, 2].max()
-                _nm = 0.001  # margin
-                _all_nose = np.where(
-                    (_verts[:, 0] >= _nx_min - _nm) & (_verts[:, 0] <= _nx_max + _nm) &
-                    (_verts[:, 1] >= _ny_min - _nm) & (_verts[:, 1] <= _ny_max + _nm) &
-                    (_verts[:, 2] >= _nz_min - _nm) & (_verts[:, 2] <= _nz_max + _nm)
-                )[0]
-                _log(f"[OAC] nose: orig={len(_nose_idx_orig)}, spatial={len(_all_nose)}")
-
-                # 1) 鼻幅 X拡大 (中心から外側へ 8% 拡大)
-                _nose_cx = _verts[_all_nose, 0].mean()
-                _verts[_all_nose, 0] = _nose_cx + (_verts[_all_nose, 0] - _nose_cx) * 1.08
-
-                # 2) 鼻高さ Z縮小 (最前面から後退 48%)
-                _nose_cz = _verts[_all_nose, 2].mean()
-                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.52
-
-                _mesh.vertices = _verts
-                _mesh.export(saved_head)
-                _log("[OAC] nose mesh patched OK")
-
-                # PLY も同じ補正
-                _gx2 = np.array(_ply['vertex']['x'], copy=True)
-                _gy2 = np.array(_ply['vertex']['y'], copy=True)
-                _gz2 = np.array(_ply['vertex']['z'], copy=True)
-                _all_nose_g = np.where(
-                    (_gx2 >= _nx_min - _nm) & (_gx2 <= _nx_max + _nm) &
-                    (_gy2 >= _ny_min - _nm) & (_gy2 <= _ny_max + _nm) &
-                    (_gz2 >= _nz_min - _nm) & (_gz2 <= _nz_max + _nm)
-                )[0]
-                _nose_cx_g = _gx2[_all_nose_g].mean()
-                _gx2[_all_nose_g] = _nose_cx_g + (_gx2[_all_nose_g] - _nose_cx_g) * 1.08
-                _nose_cz_g = _gz2[_all_nose_g].mean()
-                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.52
-                _ply['vertex'].data['x'] = _gx2
-                _ply['vertex'].data['y'] = _gy2
-                _ply['vertex'].data['z'] = _gz2
-                _ply.write(_ply_path)
-                _log(f"[OAC] nose ply patched OK, spatial={len(_all_nose_g)}")
-                # === 鼻補正ここまで ===
-
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
@@ -845,11 +696,7 @@ class Generator:
                 shutil.rmtree(oac_dir)
                 print(f"[OAC] ZIP -> {zip_out}")
             except Exception as e:
-                import traceback
-                _err = f"[OAC] ERROR: {e}\n{traceback.format_exc()}"
-                with open("/vol_out/oac_error.txt", "w") as _ef:
-                    _ef.write(_err)
-                output_vol.commit()
+                print(f"[OAC] ERROR: {e}")
                 output_zip_name = None
 
         # --- Video + audio ---
