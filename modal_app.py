@@ -45,6 +45,16 @@ app = modal.App(APP_NAME)
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=False)
 output_vol = modal.Volume.from_name(OUTPUT_VOLUME_NAME, create_if_missing=True)
 
+# ==================== OAC Vertex Correction Defaults ====================
+# 全部位 disabled = 素の LAM 出力 (FLAME 欧米人バイアスのまま)
+# UI/CLI から corrections dict を渡すことで各部位を有効化できる。
+DEFAULT_CORRECTIONS = {
+    "cheek": {"enabled": False, "y_scale": 1.0,  "margin": 0.002},
+    "nose":  {"enabled": False, "x_scale": 1.0,  "z_scale": 1.0, "margin": 0.001},
+    "jaw":   {"enabled": False, "y_scale": 1.0,  "margin": 0.002},
+    "eye":   {"enabled": False, "x_scale": 1.0,  "margin": 0.002},
+}
+
 # ==================== Image Definition ====================
 
 image = (
@@ -561,9 +571,22 @@ class Generator:
         print("=" * 70)
 
     @modal.method()
-    def generate(self, image_bytes: bytes, motion_name: str, enable_oac_file: bool):
-        """Run LAM inference. Mirrors app.py core_fn() (lines 311-471)."""
-        print(f"[DEBUG] enable_oac_file={enable_oac_file}", flush=True)
+    def generate(self, image_bytes: bytes, motion_name: str,
+                 enable_oac_file: bool, corrections: dict = None):
+        """Run LAM inference. Mirrors app.py core_fn() (lines 311-471).
+
+        Args:
+            corrections: OAC 頂点補正設定。None なら DEFAULT_CORRECTIONS (全 disabled)。
+                各部位の dict が `enabled=False` なら補正スキップ。
+        """
+        # Scaffolding: コピーしたうえで欠損キーを DEFAULT で埋める。
+        # 適用ロジックは後続コミットで OAC ブロックに追加する。
+        _corr = {k: dict(v) for k, v in DEFAULT_CORRECTIONS.items()}
+        if corrections:
+            for k, v in corrections.items():
+                if k in _corr and isinstance(v, dict):
+                    _corr[k].update(v)
+        corrections = _corr
         from datetime import datetime
         from pathlib import Path
 
@@ -590,6 +613,31 @@ class Generator:
             "./assets/sample_motion/export", base_vid, "flame_param"
         )
         base_iid = "chatting_avatar_" + datetime.now().strftime("%Y%m%d%H%M%S")
+
+        # 補正パラメータをファイル名に埋め込む (再現性担保)。
+        # 例: _c0.88_nx1.08_nz0.85_j0.85_e0.90
+        # 部位が disabled / scale=1.0 のものはサフィックスに含めない。
+        def _fmt_corr_suffix(_c: dict) -> str:
+            parts = []
+            cc = _c.get("cheek", {})
+            if cc.get("enabled") and cc.get("y_scale", 1.0) != 1.0:
+                parts.append(f"c{cc['y_scale']:.2f}")
+            nc = _c.get("nose", {})
+            if nc.get("enabled"):
+                if nc.get("x_scale", 1.0) != 1.0:
+                    parts.append(f"nx{nc['x_scale']:.2f}")
+                if nc.get("z_scale", 1.0) != 1.0:
+                    parts.append(f"nz{nc['z_scale']:.2f}")
+            jc = _c.get("jaw", {})
+            if jc.get("enabled") and jc.get("y_scale", 1.0) != 1.0:
+                parts.append(f"j{jc['y_scale']:.2f}")
+            ec = _c.get("eye", {})
+            if ec.get("enabled") and ec.get("x_scale", 1.0) != 1.0:
+                parts.append(f"e{ec['x_scale']:.2f}")
+            return ("_" + "_".join(parts)) if parts else ""
+
+        _corr_suffix = _fmt_corr_suffix(corrections)
+        base_iid = base_iid + _corr_suffix
 
         dump_video_path = os.path.join(working_dir, "output.mp4")
         dump_image_path = os.path.join(working_dir, "output.png")
@@ -661,11 +709,8 @@ class Generator:
 
         # --- OAC ZIP (optional) ---
         output_zip_name = None
-        print(f"[DEBUG] entering OAC block: enable_oac_file={enable_oac_file}", flush=True)
         if enable_oac_file:
-            print("[DEBUG] OAC block entered", flush=True)
             try:
-                os.chdir("/app")  # ensure cwd for relative paths
                 sys.path.insert(0, "/app")
                 from generateARKITGLBWithBlender import generate_glb
 
@@ -675,86 +720,229 @@ class Generator:
                 saved_head = self.lam.renderer.flame_model.save_shaped_mesh(
                     shape_param.unsqueeze(0).cuda(), fd=oac_dir,
                 )
-
-                # === 案4: 出力メッシュ頂点を直接補正 ===
-                # FLAME テンプレートの欧米人バイアスを後処理で補正
-                import trimesh as _trimesh
-
-                _mesh = _trimesh.load(saved_head)
-                _verts = _mesh.vertices.copy()  # (N, 3) numpy array
-
-                # FLAME_masks.pkl から領域マスクを取得
-                _masks_path = "./pretrained_models/human_model_files/flame_assets/flame/FLAME_masks.pkl"
-                _part_masks = np.load(_masks_path, allow_pickle=True, encoding="latin1")
-
-                # 頂点数の違い (subdivided mesh vs original) に対応
-                # save_shaped_mesh は subdivided (20018頂点)、FLAME_masks は original (5023頂点)
-                # subdivide 前の頂点インデックスはそのまま使える (先頭5023個が元の頂点)
-                _n_orig = 5023
-
-                # ① 鼻周辺: X方向拡大 (鼻幅復元)
-                _nose_idx = _part_masks["nose"]
-                _nose_idx = _nose_idx[_nose_idx < _n_orig]
-                _nose_center_x = _verts[_nose_idx, 0].mean()
-                _verts[_nose_idx, 0] = _nose_center_x + (_verts[_nose_idx, 0] - _nose_center_x) * 1.3
-                print(f"[案4] nose vertices ({len(_nose_idx)}): X scaled 1.3x from center")
-
-                # ② 頬 (face - nose - lips - eye_region): Y方向縮小
-                _face_idx = _part_masks["face"]
-                _face_idx = _face_idx[_face_idx < _n_orig]
-                _exclude = set()
-                for _region in ["nose", "lips", "eye_region", "forehead"]:
-                    _r = _part_masks[_region]
-                    _exclude.update(_r[_r < _n_orig].tolist())
-                _cheek_idx = np.array([i for i in _face_idx if i not in _exclude])
-                _cheek_center_y = _verts[_cheek_idx, 1].mean()
-                _verts[_cheek_idx, 1] = _cheek_center_y + (_verts[_cheek_idx, 1] - _cheek_center_y) * 0.88
-                print(f"[案4] cheek vertices ({len(_cheek_idx)}): Y scaled 0.9x from center")
-
-                # ③ 人中 (lips の上半分): Y方向上にシフト
-                _lips_idx = _part_masks["lips"]
-                _lips_idx = _lips_idx[_lips_idx < _n_orig]
-                _lips_center_y = _verts[_lips_idx, 1].mean()
-                _upper_lip_idx = _lips_idx[_verts[_lips_idx, 1] > _lips_center_y]
-                _verts[_upper_lip_idx, 1] += 0.003
-                print(f"[案4] upper lip vertices ({len(_upper_lip_idx)}): Y shifted +0.003")
-
-                # 補正済みメッシュを保存
-                _mesh.vertices = _verts
-                _mesh.export(saved_head)
-                print(f"[案4] corrected mesh saved to {saved_head}")
-                # === 案4ここまで ===
-
-                # offset.ply を保存してから同じ変形を適用
                 _ply_path = os.path.join(oac_dir, "offset.ply")
                 res["cano_gs_lst"][0].save_ply(
                     _ply_path, rgb2sh=False, offset2xyz=True,
                 )
 
-                # === 案4-ply: Gaussian 点群にも同じ変形を適用 ===
-                from plyfile import PlyData, PlyElement
-                _ply = PlyData.read(_ply_path)
-                _gx = _ply['vertex']['x'].copy()
-                _gy = _ply['vertex']['y'].copy()
-                _gz = _ply['vertex']['z'].copy()
+                # === Vertex corrections (UI-configurable) ===
+                # corrections["cheek"]["enabled"] が True のときのみ頬を補正。
+                # mesh (skin.glb) のみ補正 (PLY xyz は offset2xyz でオフセット保存
+                # のため bbox 選択が成立せず、視覚効果に寄与しないので触らない)。
+                _corr_cheek = corrections["cheek"]
+                if _corr_cheek["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
 
-                # ① 鼻: X方向拡大 (メッシュと同じ変形)
-                _nose_center_x_g = _gx[_nose_idx].mean()
-                _gx[_nose_idx] = _nose_center_x_g + (_gx[_nose_idx] - _nose_center_x_g) * 1.3
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] cheek correction start: y_scale={_corr_cheek['y_scale']}")
 
-                # ② 頬: Y方向縮小
-                _cheek_center_y_g = _gy[_cheek_idx].mean()
-                _gy[_cheek_idx] = _cheek_center_y_g + (_gy[_cheek_idx] - _cheek_center_y_g) * 0.88
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
 
-                # ③ 人中: Y方向シフト
-                _gy[_upper_lip_idx] += 0.003
+                        _n_orig = 5023
+                        _face_idx = np.asarray(_part_masks["face"])
+                        _face_idx = _face_idx[_face_idx < _n_orig]
+                        _exclude = set()
+                        for _r_name in ["nose", "lips", "eye_region", "forehead"]:
+                            _r = np.asarray(_part_masks[_r_name])
+                            _exclude.update(_r[_r < _n_orig].tolist())
+                        _cheek_idx_orig = np.array(
+                            [i for i in _face_idx if i not in _exclude],
+                            dtype=np.int64,
+                        )
 
-                _ply['vertex']['x'] = _gx
-                _ply['vertex']['y'] = _gy
-                _ply['vertex']['z'] = _gz
-                _ply.write(_ply_path)
-                print(f"[案4-ply] offset.ply corrected (same transforms as mesh)")
-                # === 案4-ply ここまで ===
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        # Spatial bbox expansion to include subdivided verts
+                        _cheek_ref = _verts[_cheek_idx_orig]
+                        _ymin, _ymax = _cheek_ref[:, 1].min(), _cheek_ref[:, 1].max()
+                        _xmin, _xmax = _cheek_ref[:, 0].min(), _cheek_ref[:, 0].max()
+                        _zmin, _zmax = _cheek_ref[:, 2].min(), _cheek_ref[:, 2].max()
+                        _m = _corr_cheek["margin"]
+                        _sel = np.where(
+                            (_verts[:, 0] >= _xmin - _m) & (_verts[:, 0] <= _xmax + _m) &
+                            (_verts[:, 1] >= _ymin - _m) & (_verts[:, 1] <= _ymax + _m) &
+                            (_verts[:, 2] >= _zmin - _m) & (_verts[:, 2] <= _zmax + _m)
+                        )[0]
+
+                        _cy = _verts[_sel, 1].mean()
+                        _verts[_sel, 1] = _cy + (_verts[_sel, 1] - _cy) * _corr_cheek["y_scale"]
+                        _mesh.vertices = _verts
+                        _mesh.export(saved_head)
+                        _log(f"[OAC] cheek: orig={len(_cheek_idx_orig)} "
+                             f"spatial={len(_sel)}/{len(_verts)} OK")
+                    except Exception as _ce:
+                        import traceback
+                        _err = f"[OAC] cheek ERROR: {_ce}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
+
+                # Nose correction (X width, Z height)
+                _corr_nose = corrections["nose"]
+                if _corr_nose["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] nose correction start: "
+                             f"x_scale={_corr_nose['x_scale']}, z_scale={_corr_nose['z_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+                        _n_orig = 5023
+                        _nose_idx = np.asarray(_part_masks["nose"])
+                        _nose_idx = _nose_idx[_nose_idx < _n_orig]
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        _nose_ref = _verts[_nose_idx]
+                        _nxmin, _nxmax = _nose_ref[:, 0].min(), _nose_ref[:, 0].max()
+                        _nymin, _nymax = _nose_ref[:, 1].min(), _nose_ref[:, 1].max()
+                        _nzmin, _nzmax = _nose_ref[:, 2].min(), _nose_ref[:, 2].max()
+                        _nm = _corr_nose["margin"]
+                        _nsel = np.where(
+                            (_verts[:, 0] >= _nxmin - _nm) & (_verts[:, 0] <= _nxmax + _nm) &
+                            (_verts[:, 1] >= _nymin - _nm) & (_verts[:, 1] <= _nymax + _nm) &
+                            (_verts[:, 2] >= _nzmin - _nm) & (_verts[:, 2] <= _nzmax + _nm)
+                        )[0]
+
+                        # X 方向 (鼻幅)
+                        if _corr_nose["x_scale"] != 1.0:
+                            _ncx = _verts[_nsel, 0].mean()
+                            _verts[_nsel, 0] = _ncx + (_verts[_nsel, 0] - _ncx) * _corr_nose["x_scale"]
+                        # Z 方向 (鼻高さ/突出)
+                        if _corr_nose["z_scale"] != 1.0:
+                            _ncz = _verts[_nsel, 2].mean()
+                            _verts[_nsel, 2] = _ncz + (_verts[_nsel, 2] - _ncz) * _corr_nose["z_scale"]
+
+                        _mesh.vertices = _verts
+                        _mesh.export(saved_head)
+                        _log(f"[OAC] nose: orig={len(_nose_idx)} "
+                             f"spatial={len(_nsel)}/{len(_verts)} OK")
+                    except Exception as _ne:
+                        import traceback
+                        _err = f"[OAC] nose ERROR: {_ne}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
+
+                # Jaw correction: boundary マスクの下半分 (顎ライン) を Y 縮小
+                _corr_jaw = corrections["jaw"]
+                if _corr_jaw["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] jaw correction start: y_scale={_corr_jaw['y_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+                        _n_orig = 5023
+                        _bidx = np.asarray(_part_masks["boundary"])
+                        _bidx = _bidx[_bidx < _n_orig]
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        _bref = _verts[_bidx]
+                        _bxmin, _bxmax = _bref[:, 0].min(), _bref[:, 0].max()
+                        _bymin, _bymax = _bref[:, 1].min(), _bref[:, 1].max()
+                        _bzmin, _bzmax = _bref[:, 2].min(), _bref[:, 2].max()
+                        _bm = _corr_jaw["margin"]
+                        _ball = np.where(
+                            (_verts[:, 0] >= _bxmin - _bm) & (_verts[:, 0] <= _bxmax + _bm) &
+                            (_verts[:, 1] >= _bymin - _bm) & (_verts[:, 1] <= _bymax + _bm) &
+                            (_verts[:, 2] >= _bzmin - _bm) & (_verts[:, 2] <= _bzmax + _bm)
+                        )[0]
+                        # 顎 = boundary の下半分 (Y が中央値より小さい側)
+                        _by_mid = (_bymin + _bymax) / 2
+                        _jaw_sel = _ball[_verts[_ball, 1] < _by_mid]
+                        if len(_jaw_sel) > 0:
+                            _jy = _verts[_jaw_sel, 1].mean()
+                            _verts[_jaw_sel, 1] = _jy + (
+                                _verts[_jaw_sel, 1] - _jy
+                            ) * _corr_jaw["y_scale"]
+                            _mesh.vertices = _verts
+                            _mesh.export(saved_head)
+                        _log(f"[OAC] jaw: boundary={len(_bidx)} "
+                             f"lower_half={len(_jaw_sel)}/{len(_verts)} OK")
+                    except Exception as _je:
+                        import traceback
+                        _err = f"[OAC] jaw ERROR: {_je}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
+
+                # Eye correction: eye_region マスクを X 縮小 (目尻を狭める)
+                _corr_eye = corrections["eye"]
+                if _corr_eye["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] eye correction start: x_scale={_corr_eye['x_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+                        _n_orig = 5023
+                        _eidx = np.asarray(_part_masks["eye_region"])
+                        _eidx = _eidx[_eidx < _n_orig]
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        _eref = _verts[_eidx]
+                        _exmin, _exmax = _eref[:, 0].min(), _eref[:, 0].max()
+                        _eymin, _eymax = _eref[:, 1].min(), _eref[:, 1].max()
+                        _ezmin, _ezmax = _eref[:, 2].min(), _eref[:, 2].max()
+                        _em = _corr_eye["margin"]
+                        _esel = np.where(
+                            (_verts[:, 0] >= _exmin - _em) & (_verts[:, 0] <= _exmax + _em) &
+                            (_verts[:, 1] >= _eymin - _em) & (_verts[:, 1] <= _eymax + _em) &
+                            (_verts[:, 2] >= _ezmin - _em) & (_verts[:, 2] <= _ezmax + _em)
+                        )[0]
+                        # 左右対称に縮小するため中心を 0 固定 (顔の対称軸)
+                        _verts[_esel, 0] = _verts[_esel, 0] * _corr_eye["x_scale"]
+                        _mesh.vertices = _verts
+                        _mesh.export(saved_head)
+                        _log(f"[OAC] eye: orig={len(_eidx)} "
+                             f"spatial={len(_esel)}/{len(_verts)} OK")
+                    except Exception as _ee:
+                        import traceback
+                        _err = f"[OAC] eye ERROR: {_ee}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
+                # === Vertex corrections end ===
+
                 generate_glb(
                     input_mesh=Path(saved_head),
                     template_fbx=Path("./assets/sample_oac/template_file.fbx"),
@@ -776,9 +964,7 @@ class Generator:
                 shutil.rmtree(oac_dir)
                 print(f"[OAC] ZIP -> {zip_out}")
             except Exception as e:
-                import traceback
-                print(f"[OAC] ERROR: {e}", flush=True)
-                print(traceback.format_exc(), flush=True)
+                print(f"[OAC] ERROR: {e}")
                 output_zip_name = None
 
         # --- Video + audio ---
@@ -823,14 +1009,24 @@ def web():
         "The_Shawshank_Redemption",
     ]
 
-    def predict(image_file, motion_name, enable_oac):
+    def predict(image_file, motion_name, enable_oac,
+                cheek_on, cheek_y,
+                nose_on, nose_x, nose_z,
+                jaw_on, jaw_y,
+                eye_on, eye_x):
         if image_file is None:
             raise gr.Error("Please upload an image first.")
         with open(image_file, "rb") as f:
             img_bytes = f.read()
 
+        corrections = {
+            "cheek": {"enabled": cheek_on, "y_scale": cheek_y, "margin": 0.002},
+            "nose":  {"enabled": nose_on,  "x_scale": nose_x, "z_scale": nose_z, "margin": 0.001},
+            "jaw":   {"enabled": jaw_on,   "y_scale": jaw_y, "margin": 0.002},
+            "eye":   {"enabled": eye_on,   "x_scale": eye_x, "margin": 0.002},
+        }
         video_name, zip_name = Generator().generate.remote(
-            img_bytes, motion_name, enable_oac
+            img_bytes, motion_name, enable_oac, corrections
         )
 
         output_vol.reload()
@@ -859,6 +1055,47 @@ def web():
                 enable_oac = gr.Checkbox(
                     label="Export ZIP for Chatting Avatar (OAC)", value=False,
                 )
+                with gr.Accordion("🛠 OAC 頂点補正パラメータ", open=False):
+                    gr.Markdown(
+                        "**頬 (Cheek)** — Y 方向スケール (縦長縮小)。"
+                        " 1.00=補正なし, <1.00=縮小, >1.00=拡大。"
+                    )
+                    cheek_on = gr.Checkbox(label="頬補正を有効化", value=False)
+                    cheek_y = gr.Slider(
+                        minimum=0.70, maximum=1.30, value=1.00, step=0.01,
+                        label="Cheek Y-scale",
+                    )
+                    gr.Markdown(
+                        "**鼻 (Nose)** — X=幅 / Z=高さ。大きな値は bbox 境界に"
+                        " 段差 (イボ) が出やすい。まず 1.00 付近から微調整推奨。"
+                    )
+                    nose_on = gr.Checkbox(label="鼻補正を有効化", value=False)
+                    nose_x = gr.Slider(
+                        minimum=0.80, maximum=1.30, value=1.00, step=0.01,
+                        label="Nose X-scale (幅)",
+                    )
+                    nose_z = gr.Slider(
+                        minimum=0.30, maximum=1.20, value=1.00, step=0.01,
+                        label="Nose Z-scale (高さ)",
+                    )
+                    gr.Markdown(
+                        "**顎 (Jaw)** — boundary マスク下半分の Y スケール。"
+                        " 突き出した顎を <1.00 で抑制。"
+                    )
+                    jaw_on = gr.Checkbox(label="顎補正を有効化", value=False)
+                    jaw_y = gr.Slider(
+                        minimum=0.70, maximum=1.20, value=1.00, step=0.01,
+                        label="Jaw Y-scale",
+                    )
+                    gr.Markdown(
+                        "**目 (Eye)** — eye_region の X スケール。"
+                        " <1.00 で目尻が狭まり切れ長効果を抑える。"
+                    )
+                    eye_on = gr.Checkbox(label="目補正を有効化", value=False)
+                    eye_x = gr.Slider(
+                        minimum=0.70, maximum=1.10, value=1.00, step=0.01,
+                        label="Eye X-scale",
+                    )
                 btn = gr.Button("Generate", variant="primary")
             with gr.Column(scale=1):
                 out_video = gr.Video(label="Rendered Video", autoplay=True)
@@ -866,7 +1103,11 @@ def web():
 
         btn.click(
             predict,
-            inputs=[input_img, motion_choice, enable_oac],
+            inputs=[input_img, motion_choice, enable_oac,
+                    cheek_on, cheek_y,
+                    nose_on, nose_x, nose_z,
+                    jaw_on, jaw_y,
+                    eye_on, eye_x],
             outputs=[out_video, out_zip],
         )
 
