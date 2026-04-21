@@ -796,9 +796,9 @@ class Generator:
                 _nose_cx = _verts[_all_nose, 0].mean()
                 _verts[_all_nose, 0] = _nose_cx + (_verts[_all_nose, 0] - _nose_cx) * 1.08
 
-                # 2) 鼻高さ Z縮小 (最前面から後退 15%)
+                # 2) 鼻高さ Z縮小 (最前面から後退 48%)
                 _nose_cz = _verts[_all_nose, 2].mean()
-                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.85
+                _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.52
 
                 _mesh.vertices = _verts
                 _mesh.export(saved_head)
@@ -816,7 +816,7 @@ class Generator:
                 _nose_cx_g = _gx2[_all_nose_g].mean()
                 _gx2[_all_nose_g] = _nose_cx_g + (_gx2[_all_nose_g] - _nose_cx_g) * 1.08
                 _nose_cz_g = _gz2[_all_nose_g].mean()
-                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.85
+                _gz2[_all_nose_g] = _nose_cz_g + (_gz2[_all_nose_g] - _nose_cz_g) * 0.52
                 _ply['vertex'].data['x'] = _gx2
                 _ply['vertex'].data['y'] = _gy2
                 _ply['vertex'].data['z'] = _gz2
