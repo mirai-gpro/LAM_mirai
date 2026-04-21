@@ -760,6 +760,62 @@ class Generator:
                             _ef.write(_err)
                         output_vol.commit()
                         raise
+
+                # Nose correction (X width, Z height)
+                _corr_nose = corrections["nose"]
+                if _corr_nose["enabled"]:
+                    try:
+                        import pickle
+                        import trimesh as _trimesh
+
+                        _log = lambda m: open("/vol_out/oac_debug.txt", "a").write(m + "\n")
+                        _log(f"[OAC] nose correction start: "
+                             f"x_scale={_corr_nose['x_scale']}, z_scale={_corr_nose['z_scale']}")
+
+                        _masks_path = (
+                            "/vol/pretrained_models/human_model_files/"
+                            "flame_assets/flame/FLAME_masks.pkl"
+                        )
+                        with open(_masks_path, "rb") as _mf:
+                            _part_masks = pickle.load(_mf, encoding="latin1")
+                        _n_orig = 5023
+                        _nose_idx = np.asarray(_part_masks["nose"])
+                        _nose_idx = _nose_idx[_nose_idx < _n_orig]
+
+                        _mesh = _trimesh.load_mesh(saved_head, process=False)
+                        _verts = _mesh.vertices.copy()
+
+                        _nose_ref = _verts[_nose_idx]
+                        _nxmin, _nxmax = _nose_ref[:, 0].min(), _nose_ref[:, 0].max()
+                        _nymin, _nymax = _nose_ref[:, 1].min(), _nose_ref[:, 1].max()
+                        _nzmin, _nzmax = _nose_ref[:, 2].min(), _nose_ref[:, 2].max()
+                        _nm = _corr_nose["margin"]
+                        _nsel = np.where(
+                            (_verts[:, 0] >= _nxmin - _nm) & (_verts[:, 0] <= _nxmax + _nm) &
+                            (_verts[:, 1] >= _nymin - _nm) & (_verts[:, 1] <= _nymax + _nm) &
+                            (_verts[:, 2] >= _nzmin - _nm) & (_verts[:, 2] <= _nzmax + _nm)
+                        )[0]
+
+                        # X 方向 (鼻幅)
+                        if _corr_nose["x_scale"] != 1.0:
+                            _ncx = _verts[_nsel, 0].mean()
+                            _verts[_nsel, 0] = _ncx + (_verts[_nsel, 0] - _ncx) * _corr_nose["x_scale"]
+                        # Z 方向 (鼻高さ/突出)
+                        if _corr_nose["z_scale"] != 1.0:
+                            _ncz = _verts[_nsel, 2].mean()
+                            _verts[_nsel, 2] = _ncz + (_verts[_nsel, 2] - _ncz) * _corr_nose["z_scale"]
+
+                        _mesh.vertices = _verts
+                        _mesh.export(saved_head)
+                        _log(f"[OAC] nose: orig={len(_nose_idx)} "
+                             f"spatial={len(_nsel)}/{len(_verts)} OK")
+                    except Exception as _ne:
+                        import traceback
+                        _err = f"[OAC] nose ERROR: {_ne}\n{traceback.format_exc()}"
+                        with open("/vol_out/oac_error.txt", "w") as _ef:
+                            _ef.write(_err)
+                        output_vol.commit()
+                        raise
                 # === Vertex corrections end ===
 
                 generate_glb(
@@ -829,7 +885,8 @@ def web():
     ]
 
     def predict(image_file, motion_name, enable_oac,
-                cheek_on, cheek_y):
+                cheek_on, cheek_y,
+                nose_on, nose_x, nose_z):
         if image_file is None:
             raise gr.Error("Please upload an image first.")
         with open(image_file, "rb") as f:
@@ -837,6 +894,7 @@ def web():
 
         corrections = {
             "cheek": {"enabled": cheek_on, "y_scale": cheek_y, "margin": 0.002},
+            "nose":  {"enabled": nose_on,  "x_scale": nose_x, "z_scale": nose_z, "margin": 0.001},
         }
         video_name, zip_name = Generator().generate.remote(
             img_bytes, motion_name, enable_oac, corrections
@@ -870,13 +928,26 @@ def web():
                 )
                 with gr.Accordion("🛠 OAC 頂点補正パラメータ", open=False):
                     gr.Markdown(
-                        "**頬 (Cheek)** — FLAME 欧米人バイアスで縦長化した頬を Y 方向縮小。"
-                        " 1.00 = 補正なし、<1.00 で縮小、>1.00 で拡大。"
+                        "**頬 (Cheek)** — Y 方向スケール (縦長縮小)。"
+                        " 1.00=補正なし, <1.00=縮小, >1.00=拡大。"
                     )
                     cheek_on = gr.Checkbox(label="頬補正を有効化", value=False)
                     cheek_y = gr.Slider(
                         minimum=0.70, maximum=1.30, value=1.00, step=0.01,
                         label="Cheek Y-scale",
+                    )
+                    gr.Markdown(
+                        "**鼻 (Nose)** — X=幅 / Z=高さ。大きな値は bbox 境界に"
+                        " 段差 (イボ) が出やすい。まず 1.00 付近から微調整推奨。"
+                    )
+                    nose_on = gr.Checkbox(label="鼻補正を有効化", value=False)
+                    nose_x = gr.Slider(
+                        minimum=0.80, maximum=1.30, value=1.00, step=0.01,
+                        label="Nose X-scale (幅)",
+                    )
+                    nose_z = gr.Slider(
+                        minimum=0.30, maximum=1.20, value=1.00, step=0.01,
+                        label="Nose Z-scale (高さ)",
                     )
                 btn = gr.Button("Generate", variant="primary")
             with gr.Column(scale=1):
@@ -886,7 +957,8 @@ def web():
         btn.click(
             predict,
             inputs=[input_img, motion_choice, enable_oac,
-                    cheek_on, cheek_y],
+                    cheek_on, cheek_y,
+                    nose_on, nose_x, nose_z],
             outputs=[out_video, out_zip],
         )
 
