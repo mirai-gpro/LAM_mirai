@@ -625,22 +625,6 @@ class Generator:
             get_shape_param=True,
         )
 
-        # === 案1: shape_param PCA 次元補正 ===
-        # FLAME shape basis は欧米人データで学習されており、日本人顔を表現すると
-        # 鼻が高く・頬が縦長・人中が長い・額が縮小する方向に歪む。上位PCA成分を補正。
-        SHAPE_CORRECTIONS = {
-            0: 0.8,    # 顔全体のスケール (額〜頭頂の縮小を抑制)
-            1: 0.7,    # 顔の縦横比 (縦長化を抑制)
-            2: 0.5,    # 鼻の突出度 (高すぎる鼻を抑制)
-            3: 0.7,    # 顔幅/頬骨 (頬面積の変形を抑制)
-            4: 0.8,    # 額〜眉上の高さ (頭頂部縮小を抑制)
-        }
-        print(f"[案1] shape_param before: dims 0-4 = {shape_param[:5].tolist()}")
-        for dim, scale in SHAPE_CORRECTIONS.items():
-            shape_param[dim] = shape_param[dim] * scale
-        print(f"[案1] shape_param after:  dims 0-4 = {shape_param[:5].tolist()}")
-        # === 案1ここまで ===
-
         vis_ref_img = (
             image_tensor[0].permute(1, 2, 0).cpu().detach().numpy() * 255
         ).astype(np.uint8)
@@ -660,23 +644,6 @@ class Generator:
         )
 
         motion_seq["flame_params"]["betas"] = shape_param.unsqueeze(0)
-
-        # === A案: FLAME パラメータ スケーリング ===
-        # 目的: 入力画像の印象を保持し、モーション由来の顔変形を抑制
-        # 値を変えて ZIP 比較。1.0 = 変更なし、0.0 = 完全抑制
-        PARAM_SCALES = {
-            "eyes_pose": 0.3,   # 目の動き抑制 → モーション毎の目の印象差を軽減
-            "jaw_pose": 0.7,    # 顎開閉抑制 → 下顔面の間延び軽減
-            "expr": 0.6,        # 表情全体抑制 → 欧米人/中国人化を軽減
-            "neck_pose": 0.8,   # 首の動き微抑制
-        }
-        fp = motion_seq["flame_params"]
-        for key, scale in PARAM_SCALES.items():
-            if key in fp:
-                fp[key] = fp[key] * scale
-                print(f"[A案] {key} *= {scale}")
-        # === A案ここまで ===
-
         device, dtype = "cuda", torch.float32
 
         print("[INFER] start…")
