@@ -614,6 +614,31 @@ class Generator:
         )
         base_iid = "chatting_avatar_" + datetime.now().strftime("%Y%m%d%H%M%S")
 
+        # 補正パラメータをファイル名に埋め込む (再現性担保)。
+        # 例: _c0.88_nx1.08_nz0.85_j0.85_e0.90
+        # 部位が disabled / scale=1.0 のものはサフィックスに含めない。
+        def _fmt_corr_suffix(_c: dict) -> str:
+            parts = []
+            cc = _c.get("cheek", {})
+            if cc.get("enabled") and cc.get("y_scale", 1.0) != 1.0:
+                parts.append(f"c{cc['y_scale']:.2f}")
+            nc = _c.get("nose", {})
+            if nc.get("enabled"):
+                if nc.get("x_scale", 1.0) != 1.0:
+                    parts.append(f"nx{nc['x_scale']:.2f}")
+                if nc.get("z_scale", 1.0) != 1.0:
+                    parts.append(f"nz{nc['z_scale']:.2f}")
+            jc = _c.get("jaw", {})
+            if jc.get("enabled") and jc.get("y_scale", 1.0) != 1.0:
+                parts.append(f"j{jc['y_scale']:.2f}")
+            ec = _c.get("eye", {})
+            if ec.get("enabled") and ec.get("x_scale", 1.0) != 1.0:
+                parts.append(f"e{ec['x_scale']:.2f}")
+            return ("_" + "_".join(parts)) if parts else ""
+
+        _corr_suffix = _fmt_corr_suffix(corrections)
+        base_iid = base_iid + _corr_suffix
+
         dump_video_path = os.path.join(working_dir, "output.mp4")
         dump_image_path = os.path.join(working_dir, "output.png")
         dump_image_dir = os.path.dirname(dump_image_path)
