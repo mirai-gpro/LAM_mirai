@@ -801,8 +801,7 @@ class Generator:
                 _nose_cz = _verts[_all_nose, 2].mean()
                 _verts[_all_nose, 2] = _nose_cz + (_verts[_all_nose, 2] - _nose_cz) * 0.52
 
-                # 3) 鼻先シフト: 補正なし (効果不明のため無効化)
-                _log(f"[OAC] nose lower tip shifted: {len(_nose_lower)} verts")
+                _log(f"[OAC] nose patched: width X*1.08, height Z*0.52, {len(_all_nose)} verts")
 
                 _mesh.vertices = _verts
                 _mesh.export(saved_head)
