@@ -985,140 +985,286 @@ class Generator:
         return os.path.basename(dump_video_path_wa), output_zip_name
 
 
-# ==================== Gradio Web UI ====================
+# ==================== Web UI (FastAPI + vanilla HTML) ====================
+#
+# Gradio 4.x は Modal ASGI 上で queue/SSE が不安定だったため FastAPI 直書きに
+# 切替。WebSocket/SSE 不使用、同期 POST のみ、@modal.asgi_app() との相性が
+# 良く、Modal 公式の推奨デプロイパターン。依存追加なし (fastapi は既存)。
+
+_MOTION_CHOICES = [
+    "Speeding_Scandal", "Look_In_My_Eyes", "D_ANgelo_Dinero",
+    "Michael_Wayne_Rosen", "I_Am_Iron_Man", "Anti_Drugs",
+    "Pen_Pineapple_Apple_Pen", "Taylor_Swift", "GEM",
+    "The_Shawshank_Redemption",
+]
+
+_INDEX_HTML = """<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>LAM Test Harness</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+         max-width: 960px; margin: 1.5em auto; padding: 0 1em;
+         background: #fafafa; color: #222; }
+  h1 { margin: 0 0 0.2em; color: #0066cc; }
+  .subtitle { color: #666; margin-bottom: 1.5em; }
+  form { display: grid; gap: 0.8em; background: white; padding: 1.5em;
+         border-radius: 10px; box-shadow: 0 2px 4px rgba(0,0,0,.05); }
+  .row { display: grid; grid-template-columns: 180px 1fr 70px;
+         gap: 1em; align-items: center; }
+  .row label { font-weight: 500; }
+  input[type="file"], select { padding: 0.4em; font-size: 1em; }
+  input[type="range"] { width: 100%; accent-color: #0066cc; }
+  output { font-family: "SF Mono", Consolas, monospace; font-size: 0.95em;
+           color: #444; text-align: right; }
+  .section { border: 1px solid #ddd; padding: 1em 1.2em;
+             border-radius: 8px; margin-top: 0.5em; }
+  .section h3 { margin: 0 0 0.6em; font-size: 1em; color: #444; }
+  .section .note { color: #888; font-size: 0.85em; margin-bottom: 0.8em; }
+  button { padding: 0.8em 2em; background: #0066cc; color: white;
+           border: none; border-radius: 6px; cursor: pointer;
+           font-size: 1.05em; font-weight: 500; }
+  button:hover:not(:disabled) { background: #0055aa; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  #spinner { display: none; margin-top: 0.8em; color: #666; font-size: 0.95em; }
+  #spinner.active { display: block; }
+  #error { display: none; margin-top: 1em; padding: 0.8em 1em;
+           background: #fde; color: #a00; border-left: 4px solid #c00;
+           border-radius: 4px; white-space: pre-wrap;
+           font-family: "SF Mono", Consolas, monospace; font-size: 0.9em; }
+  #result { display: none; margin-top: 1.5em; padding: 1.5em; background: white;
+            border: 2px solid #28a745; border-radius: 10px; }
+  #result h2 { margin: 0 0 0.8em; color: #28a745; }
+  #result video { width: 100%; max-width: 600px; display: block;
+                  margin: 1em auto; background: #000; border-radius: 6px; }
+  #result a { color: #0066cc; text-decoration: none;
+              font-family: "SF Mono", Consolas, monospace; }
+  #result a:hover { text-decoration: underline; }
+  .params { font-family: "SF Mono", Consolas, monospace; font-size: 0.88em;
+            color: #666; padding: 0.5em 0.8em; background: #f4f4f4;
+            border-radius: 4px; margin-top: 0.8em; }
+</style>
+</head>
+<body>
+<h1>LAM Test Harness</h1>
+<div class="subtitle">FLAME 頂点補正 × モーション の組合せテスト (FastAPI)</div>
+
+<form id="form" enctype="multipart/form-data">
+  <div class="row">
+    <label for="image">入力画像:</label>
+    <input type="file" name="image" id="image" accept="image/*" required>
+    <span></span>
+  </div>
+  <div class="row">
+    <label for="motion">モーション:</label>
+    <select name="motion" id="motion">__MOTION_OPTIONS__</select>
+    <span></span>
+  </div>
+  <div class="row">
+    <label><input type="checkbox" name="enable_oac"> OAC ZIP を出力</label>
+    <span></span>
+    <span></span>
+  </div>
+
+  <div class="section">
+    <h3>🛠 OAC 頂点補正パラメータ (未有効化時は無補正)</h3>
+    <div class="note">1.00 = 補正なし。&lt;1.00 で縮小、&gt;1.00 で拡大。
+      大きな値は bbox 境界に段差 (イボ) が出やすい。</div>
+
+    <div class="row">
+      <label><input type="checkbox" name="cheek_on"> 頬 (Cheek) Y:</label>
+      <input type="range" name="cheek_y" min="0.70" max="1.30" step="0.01" value="1.00"
+             oninput="this.nextElementSibling.value=Number(this.value).toFixed(2)">
+      <output>1.00</output>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" name="nose_on"> 鼻 (Nose) X (幅):</label>
+      <input type="range" name="nose_x" min="0.80" max="1.30" step="0.01" value="1.00"
+             oninput="this.nextElementSibling.value=Number(this.value).toFixed(2)">
+      <output>1.00</output>
+    </div>
+    <div class="row">
+      <label style="padding-left:1.5em">鼻 Z (高さ):</label>
+      <input type="range" name="nose_z" min="0.30" max="1.20" step="0.01" value="1.00"
+             oninput="this.nextElementSibling.value=Number(this.value).toFixed(2)">
+      <output>1.00</output>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" name="jaw_on"> 顎 (Jaw) Y:</label>
+      <input type="range" name="jaw_y" min="0.70" max="1.20" step="0.01" value="1.00"
+             oninput="this.nextElementSibling.value=Number(this.value).toFixed(2)">
+      <output>1.00</output>
+    </div>
+    <div class="row">
+      <label><input type="checkbox" name="eye_on"> 目 (Eye) X (目尻):</label>
+      <input type="range" name="eye_x" min="0.70" max="1.10" step="0.01" value="1.00"
+             oninput="this.nextElementSibling.value=Number(this.value).toFixed(2)">
+      <output>1.00</output>
+    </div>
+  </div>
+
+  <button type="submit" id="submit-btn">Generate (Ctrl+Enter)</button>
+  <div id="spinner">⏳ 生成中... (Generator cold start 含め 2〜4 分)</div>
+</form>
+
+<div id="error"></div>
+
+<div id="result">
+  <h2>✓ 生成完了</h2>
+  <video id="video" controls autoplay muted></video>
+  <p>📦 ZIP: <a id="zip-link" download></a></p>
+  <p>🎬 MP4: <a id="mp4-link" download></a></p>
+  <div class="params" id="params"></div>
+</div>
+
+<script>
+const form = document.getElementById('form');
+const btn = document.getElementById('submit-btn');
+const spinner = document.getElementById('spinner');
+const error = document.getElementById('error');
+const result = document.getElementById('result');
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  btn.disabled = true;
+  spinner.classList.add('active');
+  error.style.display = 'none';
+  result.style.display = 'none';
+
+  const data = new FormData(form);
+  const startedAt = Date.now();
+
+  try {
+    const res = await fetch('/generate', { method: 'POST', body: data });
+    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`HTTP ${res.status}: ${text}`);
+    }
+    const json = await res.json();
+
+    document.getElementById('params').textContent =
+      `motion=${json.motion}  corrections=${JSON.stringify(json.corrections)}  elapsed=${elapsed}s`;
+
+    const video = document.getElementById('video');
+    const mp4Link = document.getElementById('mp4-link');
+    const zipLink = document.getElementById('zip-link');
+
+    if (json.video_name) {
+      video.src = `/file/${json.video_name}`;
+      mp4Link.href = `/file/${json.video_name}`;
+      mp4Link.textContent = json.video_name;
+    } else {
+      video.style.display = 'none';
+    }
+    if (json.zip_name) {
+      zipLink.href = `/file/${json.zip_name}`;
+      zipLink.textContent = json.zip_name;
+      zipLink.parentElement.style.display = 'block';
+    } else {
+      zipLink.parentElement.style.display = 'none';
+    }
+    result.style.display = 'block';
+  } catch (err) {
+    error.textContent = `Error: ${err.message}`;
+    error.style.display = 'block';
+  } finally {
+    btn.disabled = false;
+    spinner.classList.remove('active');
+  }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && e.key === 'Enter') form.requestSubmit();
+});
+</script>
+</body>
+</html>
+"""
+
 
 @app.function(
     image=image,
     volumes={"/vol_out": output_vol},
     timeout=3600,
     scaledown_window=600,
-    # Pin to ONE container so Gradio's in-memory session state is consistent
-    # across upload / queue/join / queue/data requests
     max_containers=1,
 )
-@modal.concurrent(max_inputs=100)
+@modal.concurrent(max_inputs=20)
 @modal.asgi_app()
 def web():
-    """Gradio UI (starlette==0.40.0 avoids the old TemplateResponse crash)."""
-    import gradio as gr
+    """Minimal FastAPI UI: HTML form → POST /generate → Generator.remote()."""
+    from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+    from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
-    MOTION_CHOICES = [
-        "Speeding_Scandal", "Look_In_My_Eyes", "D_ANgelo_Dinero",
-        "Michael_Wayne_Rosen", "I_Am_Iron_Man", "Anti_Drugs",
-        "Pen_Pineapple_Apple_Pen", "Taylor_Swift", "GEM",
-        "The_Shawshank_Redemption",
-    ]
+    web_app = FastAPI()
 
-    def predict(image_file, motion_name, enable_oac,
-                cheek_on, cheek_y,
-                nose_on, nose_x, nose_z,
-                jaw_on, jaw_y,
-                eye_on, eye_x):
-        if image_file is None:
-            raise gr.Error("Please upload an image first.")
-        with open(image_file, "rb") as f:
-            img_bytes = f.read()
+    @web_app.get("/", response_class=HTMLResponse)
+    async def index():
+        opts = "".join(
+            f'<option value="{m}"{" selected" if m == "GEM" else ""}>{m}</option>'
+            for m in _MOTION_CHOICES
+        )
+        return _INDEX_HTML.replace("__MOTION_OPTIONS__", opts)
 
+    @web_app.post("/generate")
+    async def generate_endpoint(
+        image: UploadFile = File(...),
+        motion: str = Form("GEM"),
+        enable_oac: bool = Form(False),
+        cheek_on: bool = Form(False),
+        cheek_y: float = Form(1.0),
+        nose_on: bool = Form(False),
+        nose_x: float = Form(1.0),
+        nose_z: float = Form(1.0),
+        jaw_on: bool = Form(False),
+        jaw_y: float = Form(1.0),
+        eye_on: bool = Form(False),
+        eye_x: float = Form(1.0),
+    ):
+        img_bytes = await image.read()
+        if not img_bytes:
+            raise HTTPException(status_code=400, detail="Empty image upload")
         corrections = {
             "cheek": {"enabled": cheek_on, "y_scale": cheek_y, "margin": 0.002},
             "nose":  {"enabled": nose_on,  "x_scale": nose_x, "z_scale": nose_z, "margin": 0.001},
             "jaw":   {"enabled": jaw_on,   "y_scale": jaw_y, "margin": 0.002},
             "eye":   {"enabled": eye_on,   "x_scale": eye_x, "margin": 0.002},
         }
-        video_name, zip_name = Generator().generate.remote(
-            img_bytes, motion_name, enable_oac, corrections
-        )
-
+        try:
+            video_name, zip_name = Generator().generate.remote(
+                img_bytes, motion, enable_oac, corrections
+            )
+        except Exception as e:
+            import traceback
+            raise HTTPException(
+                status_code=500,
+                detail=f"Generator error: {e}\n{traceback.format_exc()}",
+            )
         output_vol.reload()
+        return JSONResponse({
+            "video_name": video_name,
+            "zip_name": zip_name,
+            "motion": motion,
+            "corrections": corrections,
+        })
 
-        video_path = f"/vol_out/{video_name}" if video_name else None
-        zip_path = f"/vol_out/{zip_name}" if zip_name else None
-        return video_path, zip_path
+    @web_app.get("/file/{filename}")
+    async def get_file(filename: str):
+        output_vol.reload()
+        path = f"/vol_out/{filename}"
+        if not os.path.isfile(path):
+            raise HTTPException(status_code=404, detail=f"{filename} not found")
+        if filename.endswith(".mp4"):
+            return FileResponse(path, media_type="video/mp4")
+        if filename.endswith(".zip"):
+            return FileResponse(
+                path, media_type="application/zip", filename=filename
+            )
+        return FileResponse(path, filename=filename)
 
-    with gr.Blocks(title="LAM on Modal (ModelScope reproduction)") as demo:
-        gr.Markdown(
-            "# LAM: Large Avatar Model - Modal Edition\n"
-            "Exact reproduction of the ModelScope Studio pipeline. "
-            "Drop an image, pick a motion, generate an animated avatar (+ optional OAC ZIP)."
-        )
-        with gr.Row():
-            with gr.Column(scale=1):
-                input_img = gr.Image(
-                    type="filepath", label="Input Image",
-                    sources=["upload"], height=480,
-                )
-                motion_choice = gr.Dropdown(
-                    choices=MOTION_CHOICES,
-                    value="GEM",
-                    label="Motion Template",
-                )
-                enable_oac = gr.Checkbox(
-                    label="Export ZIP for Chatting Avatar (OAC)", value=False,
-                )
-                with gr.Accordion("🛠 OAC 頂点補正パラメータ", open=False):
-                    gr.Markdown(
-                        "**頬 (Cheek)** — Y 方向スケール (縦長縮小)。"
-                        " 1.00=補正なし, <1.00=縮小, >1.00=拡大。"
-                    )
-                    cheek_on = gr.Checkbox(label="頬補正を有効化", value=False)
-                    cheek_y = gr.Slider(
-                        minimum=0.70, maximum=1.30, value=1.00, step=0.01,
-                        label="Cheek Y-scale",
-                    )
-                    gr.Markdown(
-                        "**鼻 (Nose)** — X=幅 / Z=高さ。大きな値は bbox 境界に"
-                        " 段差 (イボ) が出やすい。まず 1.00 付近から微調整推奨。"
-                    )
-                    nose_on = gr.Checkbox(label="鼻補正を有効化", value=False)
-                    nose_x = gr.Slider(
-                        minimum=0.80, maximum=1.30, value=1.00, step=0.01,
-                        label="Nose X-scale (幅)",
-                    )
-                    nose_z = gr.Slider(
-                        minimum=0.30, maximum=1.20, value=1.00, step=0.01,
-                        label="Nose Z-scale (高さ)",
-                    )
-                    gr.Markdown(
-                        "**顎 (Jaw)** — boundary マスク下半分の Y スケール。"
-                        " 突き出した顎を <1.00 で抑制。"
-                    )
-                    jaw_on = gr.Checkbox(label="顎補正を有効化", value=False)
-                    jaw_y = gr.Slider(
-                        minimum=0.70, maximum=1.20, value=1.00, step=0.01,
-                        label="Jaw Y-scale",
-                    )
-                    gr.Markdown(
-                        "**目 (Eye)** — eye_region の X スケール。"
-                        " <1.00 で目尻が狭まり切れ長効果を抑える。"
-                    )
-                    eye_on = gr.Checkbox(label="目補正を有効化", value=False)
-                    eye_x = gr.Slider(
-                        minimum=0.70, maximum=1.10, value=1.00, step=0.01,
-                        label="Eye X-scale",
-                    )
-                btn = gr.Button("Generate", variant="primary")
-            with gr.Column(scale=1):
-                out_video = gr.Video(label="Rendered Video", autoplay=True)
-                out_zip = gr.File(label="Output ZIP")
-
-        btn.click(
-            predict,
-            inputs=[input_img, motion_choice, enable_oac,
-                    cheek_on, cheek_y,
-                    nose_on, nose_x, nose_z,
-                    jaw_on, jaw_y,
-                    eye_on, eye_x],
-            outputs=[out_video, out_zip],
-        )
-
-    demo.max_file_size = None
-    # demo.queue() は無効化: Gradio 4.x のキューは Modal ASGI 上で SSE stream
-    # が維持できず、/queue/join は 200 OK 返すが /queue/data が届かず predict()
-    # が永遠に dispatch されないハングが発生する (28分待っても完走しない)。
-    # 同期モード: predict() が HTTP request ハンドラで直接ブロックし、Gradio は
-    # 結果を同期レスポンスで返す。Modal の asgi_app は長時間ブロック HTTP を
-    # サポート (function timeout=3600s まで)。
-    return gr.routes.App.create_app(demo)
+    return web_app
 
 
 # ==================== CLI Test (bypass UI, test Generator directly) ====================
