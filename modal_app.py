@@ -1112,7 +1112,12 @@ def web():
         )
 
     demo.max_file_size = None
-    demo.queue()
+    # demo.queue() は無効化: Gradio 4.x のキューは Modal ASGI 上で SSE stream
+    # が維持できず、/queue/join は 200 OK 返すが /queue/data が届かず predict()
+    # が永遠に dispatch されないハングが発生する (28分待っても完走しない)。
+    # 同期モード: predict() が HTTP request ハンドラで直接ブロックし、Gradio は
+    # 結果を同期レスポンスで返す。Modal の asgi_app は長時間ブロック HTTP を
+    # サポート (function timeout=3600s まで)。
     return gr.routes.App.create_app(demo)
 
 
